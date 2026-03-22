@@ -1,0 +1,35 @@
+{
+  "name": "arcgis-mcp-service",
+  "version": "1.0.0",
+  "description": "MCP server exposing ArcGIS REST geocoding and feature layer tools",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/652036/arcgis-mcp-service.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/652036/arcgis-mcp-service/issues"
+  },
+  "homepage": "https://github.com/652036/arcgis-mcp-service#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
