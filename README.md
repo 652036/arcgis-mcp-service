@@ -1,63 +1,57 @@
 # arcgis-pro-mcp
 
-基于 [Model Context Protocol](https://modelcontextprotocol.io) 的 **ArcGIS Pro** 工具服务：通过 **arcpy.mp** 与 **arcpy** 读取工程、数据模式与制图属性，并支持将布局导出为 PDF。
+基于 [Model Context Protocol](https://modelcontextprotocol.io) 的 **ArcGIS Pro** 自动化服务：通过 **arcpy.mp** 与受控 **arcpy** 地理处理，读写工程、图层、布局与导出。
+
+**说明：** 无法通过本服务「完全替代」ArcGIS Pro 的图形界面（菜单、窗格、交互编辑等未公开为脚本 API）。此处覆盖的是 **arcpy 能表达的工程/制图/数据自动化**；更深层能力需 Esri 插件或 Pro SDK。
 
 ## 环境要求
 
 - Windows，已安装 **ArcGIS Pro**
-- 使用 **Pro 自带的 Python**（该环境提供 `arcpy`），例如：
+- 使用 **Pro 自带的 Python**，例如：
 
 ```text
 "C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe"
 ```
 
-## 可选环境变量
+## 环境变量（安全与路径）
 
 | 变量 | 说明 |
 |------|------|
-| `ARCGIS_PRO_MCP_EXPORT_ROOT` | 若设置，`arcgis_pro_export_layout_pdf` 的 `output_pdf_path` 解析后（`realpath`）必须位于该目录下，用于限制 PDF 导出位置。 |
+| `ARCGIS_PRO_MCP_ALLOW_WRITE` | 设为 `1` / `true` / `yes` / `on` 才允许：**保存工程、改图层、按属性选择、地图框缩放到书签、添加/移除图层**。 |
+| `ARCGIS_PRO_MCP_EXPORT_ROOT` | 若设置，**所有导出与 saveACopy 的 aprx** 解析后的路径须位于该目录下。 |
+| `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` | 预留：将来写入型 GP 输出路径校验（当前白名单 GP 多为只读）。 |
+| `ARCGIS_PRO_MCP_INPUT_ROOTS` | 若设置，多个根目录用系统路径分隔符分隔（Windows 为 `;`），**addDataFromPath、Describe、ListFields、GetCount 等输入路径**须落在其一之下。 |
 
-## 安装
+## 安装与运行
 
 ```bash
 pip install -e .
-```
-
-## 运行
-
-```bash
-arcgis-pro-mcp
-# 或
 python -m arcgis_pro_mcp
 ```
 
-务必用上面的 Pro 解释器执行，否则无法导入 `arcpy`。
+## 能力探测
 
-## MCP 工具（与 Pro 制图工程对应）
+调用 **`arcgis_pro_server_capabilities`** 可查看当前是否允许写入、路径策略是否启用，以及工具分类列表。
 
-| 工具 | 说明 |
-|------|------|
-| `arcgis_pro_environment_info` | 当前 ArcPy / Pro 安装与产品信息（无需 .aprx） |
-| `arcgis_pro_describe` | 对数据集/数据源路径执行 `Describe`（类型、范围、空间参考等） |
-| `arcgis_pro_list_fields` | 表或要素类字段列表（`ListFields`） |
-| `arcgis_pro_project_connections` | 工程中的文件夹连接、数据库、工具箱等 |
-| `arcgis_pro_project_summary` | 工程概览：地图/布局/报表、损坏数据源抽样 |
-| `arcgis_pro_list_maps` | 列出所有地图 |
-| `arcgis_pro_list_layouts` | 列出所有布局 |
-| `arcgis_pro_list_reports` | 列出报表（若当前 Pro 版本支持） |
-| `arcgis_pro_list_layers` | 列出地图中的图层（含要素/栅格标识与数据源） |
-| `arcgis_pro_list_tables` | 列出地图中的表 |
-| `arcgis_pro_map_spatial_reference` | 地图空间参考 |
-| `arcgis_pro_map_camera` | 地图默认 Camera（比例尺、范围等，若可读取） |
-| `arcgis_pro_list_bookmarks` | 地图书签 |
-| `arcgis_pro_layer_properties` | 单个图层：定义查询、符号类型、透明度等 |
-| `arcgis_pro_list_layout_elements` | 布局元素类型与名称（可选按元素类型过滤） |
-| `arcgis_pro_mapframe_extent` | 布局中地图框的范围、比例尺、关联地图 |
-| `arcgis_pro_export_layout_pdf` | 将布局导出为 PDF（**须使用绝对路径**；见 `ARCGIS_PRO_MCP_EXPORT_ROOT`） |
+## 工具概览
 
-## Cursor 示例（`.cursor/mcp.json`）
+### 只读 / 元数据
 
-将 `command` 指向本机 Pro 的 `python.exe`，`args` 使用本仓库的模块或已安装的包：
+`arcgis_pro_environment_info`、`arcgis_pro_server_capabilities`、`arcgis_pro_describe`、`arcgis_pro_list_fields`、`arcgis_pro_project_connections`、`arcgis_pro_project_summary`、各类 `list_*`、`map_*` 读取、`mapframe_extent`、`layer_properties`、增强后的 **`arcgis_pro_list_bookmarks`**（含 description、has_thumbnail、map_name）。
+
+### 导出（须绝对路径；受 `EXPORT_ROOT` 约束）
+
+`arcgis_pro_export_layout_pdf`、`arcgis_pro_export_layout_image`（`png` / `jpeg` / `tiff`，TIFF 可选 `world_file`）。
+
+### 写入（须 `ALLOW_WRITE`）
+
+`arcgis_pro_save_project`、`arcgis_pro_save_project_copy`、`arcgis_pro_set_layer_visible`、`arcgis_pro_set_layer_transparency`、`arcgis_pro_set_definition_query`、`arcgis_pro_select_layer_by_attribute`、`arcgis_pro_mapframe_zoom_to_bookmark`、`arcgis_pro_add_layer_from_path`、`arcgis_pro_remove_layer`。
+
+### 白名单地理处理
+
+`arcgis_pro_gp_list_registered`、`arcgis_pro_gp_get_count`、`arcgis_pro_gp_get_raster_property`（`property_type` 已枚举限制）。
+
+## Cursor 示例
 
 ```json
 {
@@ -67,20 +61,15 @@ python -m arcgis_pro_mcp
       "args": ["-m", "arcgis_pro_mcp"],
       "cwd": "C:\\绝对路径\\到\\本仓库",
       "env": {
-        "ARCGIS_PRO_MCP_EXPORT_ROOT": "C:\\导出目录"
+        "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+        "ARCGIS_PRO_MCP_EXPORT_ROOT": "C:\\ArcGISMCP_Outputs",
+        "ARCGIS_PRO_MCP_INPUT_ROOTS": "C:\\GIS_Data;D:\\EnterpriseGDB"
       }
     }
   }
 }
 ```
 
-若已通过 `pip install -e .` 安装到 Pro 的 Python 环境，可省略 `cwd` 或仅保留工作目录需要时的路径。
-
-## 说明
-
-- 工具覆盖 **工程 / 数据描述 / 地图 / 图层 / 布局 / 地图框 / 导出** 等常见制图工作流；**不包含**任意地理处理（GP）工具箱的开放执行，以降低误操作风险。
-- 导出 PDF 会写磁盘；`output_pdf_path` 必须为**绝对路径**。若 Pro 正独占打开同一 `.aprx`，请先确认无冲突。
-
 ## CI
 
-GitHub Actions 在 Ubuntu 上执行 `pip install -e .` 与 `py_compile`（不加载 `arcpy`）。
+GitHub Actions 在 Ubuntu 上 `pip install -e .` 并对 `arcgis_pro_mcp` 下模块做 `py_compile`（不加载 `arcpy`）。

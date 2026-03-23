@@ -16,4 +16,7 @@ jobs:
       - name: Install package
         run: pip install -e .
       - name: Syntax check
-        run: python -m py_compile arcgis_pro_mcp/server.py
+        run: |
+          python -m py_compile arcgis_pro_mcp/server.py
+          python -m py_compile arcgis_pro_mcp/paths.py
+          python -m py_compile arcgis_pro_mcp/gp_allowlist.py
