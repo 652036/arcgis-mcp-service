@@ -45,7 +45,10 @@ python -m arcgis_pro_mcp
 
 **白名单 GP（只读类）：** `arcgis_pro_gp_get_count`、`arcgis_pro_gp_get_raster_property`、`arcgis_pro_gp_get_cell_value`、`arcgis_pro_gp_test_schema_lock`、`arcgis_pro_gp_list_registered`。
 
-**白名单 GP（写入类，须同时 `ALLOW_WRITE` + `GP_OUTPUT_ROOT`）：** `arcgis_pro_gp_buffer`、`arcgis_pro_gp_clip`、`arcgis_pro_gp_analysis_select`、`arcgis_pro_gp_copy_features`。
+**白名单 GP（写入类，须同时 `ALLOW_WRITE` + `GP_OUTPUT_ROOT`）：**  
+`arcgis_pro_gp_buffer`、`arcgis_pro_gp_clip`、`arcgis_pro_gp_analysis_select`、`arcgis_pro_gp_copy_features`、`arcgis_pro_gp_dissolve`、`arcgis_pro_gp_intersect`、`arcgis_pro_gp_union`、`arcgis_pro_gp_erase`、`arcgis_pro_gp_spatial_join`、`arcgis_pro_gp_statistics`、`arcgis_pro_gp_frequency`、`arcgis_pro_gp_table_select`、`arcgis_pro_gp_merge`、`arcgis_pro_gp_project`。
+
+**地图/图层制图：** `arcgis_pro_set_map_spatial_reference`、`arcgis_pro_layer_replace_data_source`、`arcgis_pro_apply_symbology_from_layer`、`arcgis_pro_set_layer_scale_range`、`arcgis_pro_toggle_layer_labels`。
 
 **选择集：** `arcgis_pro_select_layer_by_location`、`arcgis_pro_clear_map_selection`；只读：`arcgis_pro_layer_selection_count`、`arcgis_pro_layer_selection_fids`。
 

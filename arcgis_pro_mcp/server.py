@@ -28,7 +28,7 @@ mcp = FastMCP(
         "通过 ArcPy 自动化 ArcGIS Pro 工程：读/写地图与图层、布局与导出、白名单地理处理。"
         "无法替代 Pro 全部 UI；写入与选择需 ARCGIS_PRO_MCP_ALLOW_WRITE=1。"
         "导出路径受 ARCGIS_PRO_MCP_EXPORT_ROOT 约束（若设置）；"
-        "写入型 GP（Buffer/Clip/Select/CopyFeatures）必须设置 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT 且输出位于其下。"
+        "写入型 GP（Buffer/Clip/叠加分析/统计/投影等）必须设置 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT 且输出位于其下。"
         "须在 Windows 上使用 Pro 捆绑的 Python。"
     ),
 )
@@ -249,6 +249,21 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_remove_join",
         "arcgis_pro_update_layout_text_element",
         "arcgis_pro_set_mapframe_extent",
+        "arcgis_pro_set_map_spatial_reference",
+        "arcgis_pro_layer_replace_data_source",
+        "arcgis_pro_apply_symbology_from_layer",
+        "arcgis_pro_set_layer_scale_range",
+        "arcgis_pro_toggle_layer_labels",
+        "arcgis_pro_gp_dissolve",
+        "arcgis_pro_gp_intersect",
+        "arcgis_pro_gp_union",
+        "arcgis_pro_gp_erase",
+        "arcgis_pro_gp_spatial_join",
+        "arcgis_pro_gp_statistics",
+        "arcgis_pro_gp_frequency",
+        "arcgis_pro_gp_table_select",
+        "arcgis_pro_gp_merge",
+        "arcgis_pro_gp_project",
     ]
     tools_export = [
         "arcgis_pro_export_layout_pdf",
@@ -1838,3 +1853,365 @@ def arcgis_pro_set_mapframe_extent(
     except Exception as ex:  # noqa: BLE001
         out["extent_read_error"] = str(ex)[:300]
     return _json_dumps(out)
+
+
+def _symbology_template_path(path: str) -> str:
+    p = validate_input_path_optional(path, "symbology_layer_path")
+    pl = p.lower()
+    if not (pl.endswith(".lyrx") or pl.endswith(".lyr")):
+        raise RuntimeError("symbology_layer_path 须为 .lyrx 或 .lyr")
+    return p
+
+
+@mcp.tool(
+    name="arcgis_pro_set_map_spatial_reference",
+    description="设置地图的空间参考（SpatialReference factoryCode / WKID）。需 ALLOW_WRITE；影响整图显示与分析上下文。",
+)
+def arcgis_pro_set_map_spatial_reference(
+    aprx_path: str,
+    map_name: str,
+    wkid: int,
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    m.spatialReference = arcpy.SpatialReference(int(wkid))  # type: ignore[attr-defined]
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "wkid": int(wkid)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_layer_replace_data_source",
+    description=(
+        "Layer.replaceDataSource：用新的 workspace 与要素类名修复/替换数据源。"
+        "dataset_type 示例：FEATURE_CLASS、SHAPEFILE_WORKSPACE、RASTER_DATASET、TEXT_TABLE。"
+        "需 ALLOW_WRITE。"
+    ),
+)
+def arcgis_pro_layer_replace_data_source(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    workspace_path: str,
+    dataset_name: str,
+    dataset_type: str,
+    validate: bool = True,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    ws = validate_input_path_optional(workspace_path, "workspace_path")
+    dt = dataset_type.strip()
+    if not dt:
+        raise RuntimeError("dataset_type 不能为空")
+    dn = dataset_name.strip()
+    if not dn:
+        raise RuntimeError("dataset_name 不能为空")
+    lyr.replaceDataSource(ws, dt, dn, bool(validate))  # type: ignore[attr-defined]
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "map_name": map_name,
+            "layer_name": layer_name,
+            "workspace_path": ws,
+            "dataset_name": dn,
+            "dataset_type": dt,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_apply_symbology_from_layer",
+    description=(
+        "management.ApplySymbologyFromLayer：从 .lyrx/.lyr 模板应用符号系统到地图图层。"
+        "模板路径受 INPUT_ROOTS 约束（若设置）。需 ALLOW_WRITE。"
+    ),
+)
+def arcgis_pro_apply_symbology_from_layer(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    symbology_layer_path: str,
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    sp = _symbology_template_path(symbology_layer_path)
+    arcpy.management.ApplySymbologyFromLayer(lyr, sp)  # type: ignore[attr-defined]
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "map_name": map_name,
+            "layer_name": layer_name,
+            "symbology_layer_path": sp,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_set_layer_scale_range",
+    description="设置图层可见比例范围 minimumScale / maximumScale（0 通常表示不限制）。至少传入一个比例。需 ALLOW_WRITE。",
+)
+def arcgis_pro_set_layer_scale_range(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    minimum_scale: float | None = None,
+    maximum_scale: float | None = None,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    updated: dict[str, float] = {}
+    if minimum_scale is not None:
+        lyr.minimumScale = float(minimum_scale)  # type: ignore[attr-defined]
+        updated["minimum_scale"] = float(minimum_scale)
+    if maximum_scale is not None:
+        lyr.maximumScale = float(maximum_scale)  # type: ignore[attr-defined]
+        updated["maximum_scale"] = float(maximum_scale)
+    if not updated:
+        raise RuntimeError("至少提供 minimum_scale 或 maximum_scale")
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "map_name": map_name,
+            "layer_name": layer_name,
+            "updated": updated,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_toggle_layer_labels",
+    description="开关图层标注（Layer.showLabels）。需 ALLOW_WRITE。",
+)
+def arcgis_pro_toggle_layer_labels(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    show_labels: bool,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    lyr.showLabels = bool(show_labels)
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "map_name": map_name,
+            "layer_name": layer_name,
+            "show_labels": lyr.showLabels,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_dissolve",
+    description="analysis.Dissolve；输出须在 GP_OUTPUT_ROOT；须 ALLOW_WRITE。可选 dissolve_field。",
+)
+def arcgis_pro_gp_dissolve(
+    in_features: str,
+    out_feature_class: str,
+    dissolve_field: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_dissolve(arcpy, in_features, out_feature_class, dissolve_field)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_features": normalize_path(in_features),
+            "out_feature_class": normalize_path(out_feature_class),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_intersect",
+    description="analysis.Intersect，至少 2 个输入路径；输出在 GP_OUTPUT_ROOT。",
+)
+def arcgis_pro_gp_intersect(
+    in_feature_paths: list[str],
+    out_feature_class: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_intersect(arcpy, in_feature_paths, out_feature_class)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_feature_paths": [normalize_path(p) for p in in_feature_paths],
+            "out_feature_class": normalize_path(out_feature_class),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_union",
+    description="analysis.Union，至少 2 个输入；输出在 GP_OUTPUT_ROOT。",
+)
+def arcgis_pro_gp_union(
+    in_feature_paths: list[str],
+    out_feature_class: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_union(arcpy, in_feature_paths, out_feature_class)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_feature_paths": [normalize_path(p) for p in in_feature_paths],
+            "out_feature_class": normalize_path(out_feature_class),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_erase",
+    description="analysis.Erase；输出在 GP_OUTPUT_ROOT。",
+)
+def arcgis_pro_gp_erase(
+    in_features: str,
+    erase_features: str,
+    out_feature_class: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_erase(arcpy, in_features, erase_features, out_feature_class)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_features": normalize_path(in_features),
+            "erase_features": normalize_path(erase_features),
+            "out_feature_class": normalize_path(out_feature_class),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_spatial_join",
+    description="analysis.SpatialJoin（默认参数）；输出在 GP_OUTPUT_ROOT。",
+)
+def arcgis_pro_gp_spatial_join(
+    target_features: str,
+    join_features: str,
+    out_feature_class: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_spatial_join(arcpy, target_features, join_features, out_feature_class)
+    return _json_dumps(
+        {
+            "ok": True,
+            "target_features": normalize_path(target_features),
+            "join_features": normalize_path(join_features),
+            "out_feature_class": normalize_path(out_feature_class),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_statistics",
+    description="analysis.Statistics（汇总统计）；statistics_fields 如 \"POP SUM;AREA MEAN\"；输出表在 GP_OUTPUT_ROOT。",
+)
+def arcgis_pro_gp_statistics(
+    in_table: str,
+    out_table: str,
+    statistics_fields: str,
+    case_field: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_statistics(arcpy, in_table, out_table, statistics_fields, case_field)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_table": normalize_path(in_table),
+            "out_table": normalize_path(out_table),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_frequency",
+    description="analysis.Frequency；frequency_fields 可用分号分隔多字段；输出在 GP_OUTPUT_ROOT。",
+)
+def arcgis_pro_gp_frequency(
+    in_table: str,
+    out_table: str,
+    frequency_fields: str,
+    summary_fields: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_frequency(arcpy, in_table, out_table, frequency_fields, summary_fields)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_table": normalize_path(in_table),
+            "out_table": normalize_path(out_table),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_table_select",
+    description="analysis.TableSelect；可选 where_clause；输出在 GP_OUTPUT_ROOT。",
+)
+def arcgis_pro_gp_table_select(
+    in_table: str,
+    out_table: str,
+    where_clause: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_table_select(arcpy, in_table, out_table, where_clause)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_table": normalize_path(in_table),
+            "out_table": normalize_path(out_table),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_merge",
+    description="management.Merge；至少 2 个输入；输出在 GP_OUTPUT_ROOT。",
+)
+def arcgis_pro_gp_merge(
+    in_feature_paths: list[str],
+    output_feature_class: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_merge(arcpy, in_feature_paths, output_feature_class)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_feature_paths": [normalize_path(p) for p in in_feature_paths],
+            "output_feature_class": normalize_path(output_feature_class),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_project",
+    description="management.Project：要素类/栅格等投影到 out_wkid；可选 transform_method；输出在 GP_OUTPUT_ROOT。",
+)
+def arcgis_pro_gp_project(
+    in_dataset: str,
+    out_dataset: str,
+    out_wkid: int,
+    transform_method: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_project(arcpy, in_dataset, out_dataset, out_wkid, transform_method)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_dataset": normalize_path(in_dataset),
+            "out_dataset": normalize_path(out_dataset),
+            "out_wkid": int(out_wkid),
+        },
+    )
