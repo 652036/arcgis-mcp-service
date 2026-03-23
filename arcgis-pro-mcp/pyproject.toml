@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "arcgis-pro-mcp"
+version = "0.1.0"
+description = "MCP server for ArcGIS Pro (ArcPy) and ArcGIS Portal / ArcGIS Online web maps"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.20",
+  "httpx>=0.27",
+]
+
+[project.scripts]
+arcgis-pro-mcp = "arcgis_pro_mcp.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["arcgis_pro_mcp"]

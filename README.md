@@ -1,52 +1,81 @@
 # arcgis-mcp-service
 
-基于 [Model Context Protocol](https://modelcontextprotocol.io) 的 ArcGIS 工具服务，通过 ArcGIS REST API 提供地理编码、逆地理编码、图层元数据与要素查询等能力。
+本仓库提供 **两个** 独立的 MCP 服务，可按需选用。
 
-## 依赖
+---
 
-- Node.js 18+
+## 1. ArcGIS REST（Node / TypeScript）
 
-## 安装
+面向 **GeocodeServer** 与 **要素图层 REST**（与是否安装 ArcGIS Pro 无关）：地理编码、图层 `query`、元数据等。
+
+**依赖：** Node.js 18+  
 
 ```bash
 npm install
-```
-
-## 环境变量
-
-| 变量 | 说明 |
-|------|------|
-| `ARCGIS_TOKEN` | 可选。ArcGIS Online API Key 或 OAuth `access_token`，将作为 `token` 参数附加到请求上。 |
-| `ARCGIS_GEOCODE_URL` | 可选。GeocodeServer 根地址（不含尾部的 `/findAddressCandidates`）。默认使用 Esri World Geocoding。 |
-
-## 运行
-
-```bash
 npm start
 ```
 
-通过 stdio 与 MCP 宿主通信；在 Cursor / Claude Desktop 等客户端中配置为 MCP server 命令：`npx tsx` 或 `node` 指向本仓库的入口。
+| 环境变量 | 说明 |
+|----------|------|
+| `ARCGIS_TOKEN` | 可选，作为 `token` 附加到 REST 请求 |
+| `ARCGIS_GEOCODE_URL` | 可选，GeocodeServer 根地址；默认 World Geocoding |
 
-### Cursor 示例（`.cursor/mcp.json` 片段）
+**工具：** `arcgis_geocode`、`arcgis_reverse_geocode`、`arcgis_geocode_suggest`、`arcgis_layer_metadata`、`arcgis_query_layer`
+
+---
+
+## 2. ArcGIS Pro / Web 地图（Python）
+
+目录：`arcgis-pro-mcp/`
+
+- **ArcGIS Pro**：通过 **ArcPy** 读取本机 `.aprx` 中的地图、布局、图层（**必须在已安装 ArcGIS Pro 的 Windows 上，用 Pro 自带的 Python 启动**）。
+- **Map（Web Map）**：通过 **ArcGIS Online / Portal Sharing REST** 拉取 Web Map JSON、条目信息与搜索（任意平台，需网络；私有内容配 token）。
+
+```bash
+cd arcgis-pro-mcp
+pip install -e .
+python -m arcgis_pro_mcp
+```
+
+| 环境变量 | 说明 |
+|----------|------|
+| `ARCGIS_PORTAL_URL` | 可选，默认 `https://www.arcgis.com/sharing/rest` |
+| `ARCGIS_TOKEN` / `ARCGIS_PORTAL_TOKEN` | 可选，访问私有 Portal 内容 |
+
+**Pro（ArcPy）工具：** `arcgis_pro_list_maps`、`arcgis_pro_list_layouts`、`arcgis_pro_list_layers`  
+
+**Portal / Web Map 工具：** `arcgis_portal_webmap_json`、`arcgis_portal_item_metadata`、`arcgis_portal_search_items`
+
+详见 `arcgis-pro-mcp/README.md`。
+
+---
+
+## Cursor 配置示例
+
+**REST（TypeScript）：**
 
 ```json
 {
   "mcpServers": {
-    "arcgis": {
+    "arcgis-rest": {
       "command": "npx",
-      "args": ["tsx", "/绝对路径/到/本仓库/src/index.ts"],
-      "env": {
-        "ARCGIS_TOKEN": "你的令牌或留空"
-      }
+      "args": ["tsx", "/绝对路径/本仓库/src/index.ts"],
+      "env": { "ARCGIS_TOKEN": "" }
     }
   }
 }
 ```
 
-## MCP 工具一览
+**Pro / Web 地图（Python，Pro 用户请把 `command` 换成 Pro 自带 `python.exe`）：**
 
-- `arcgis_geocode` — 正向地理编码  
-- `arcgis_reverse_geocode` — 逆地理编码（WGS84 经纬度）  
-- `arcgis_geocode_suggest` — 地址/地名自动补全建议  
-- `arcgis_layer_metadata` — 读取图层 REST 元数据  
-- `arcgis_query_layer` — 对要素图层执行 `query`（`where`、字段、分页等）
+```json
+{
+  "mcpServers": {
+    "arcgis-pro-map": {
+      "command": "python3",
+      "args": ["-m", "arcgis_pro_mcp"],
+      "cwd": "/绝对路径/本仓库/arcgis-pro-mcp"
+    }
+  }
+}
+```
