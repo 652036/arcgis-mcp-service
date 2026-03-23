@@ -230,3 +230,41 @@ def run_project(
         arcpy.management.Project(inds, outd, sr, tm)  # type: ignore[attr-defined]
     else:
         arcpy.management.Project(inds, outd, sr)  # type: ignore[attr-defined]
+
+
+def run_export_features(arcpy: Any, in_features: str, out_path: str) -> None:
+    require_allow_write()
+    require_gp_output_root_mandatory()
+    inf = validate_input_path_optional(in_features, "in_features")
+    out = validate_gp_output_path(out_path, "out_path")
+    arcpy.management.ExportFeatures(inf, out)  # type: ignore[attr-defined]
+
+
+def run_export_table(arcpy: Any, in_table: str, out_path: str) -> None:
+    require_allow_write()
+    require_gp_output_root_mandatory()
+    intable = validate_input_path_optional(in_table, "in_table")
+    out = validate_gp_output_path(out_path, "out_path")
+    arcpy.management.ExportTable(intable, out)  # type: ignore[attr-defined]
+
+
+def run_near(arcpy: Any, in_features: str, near_features: str) -> None:
+    """会修改 in_features 属性表（写入 NEAR_* 字段），不使用 GP_OUTPUT_ROOT。"""
+    require_allow_write()
+    inf = validate_input_path_optional(in_features, "in_features")
+    nf = validate_input_path_optional(near_features, "near_features")
+    arcpy.analysis.Near(inf, nf)  # type: ignore[attr-defined]
+
+
+def run_generate_near_table(
+    arcpy: Any,
+    in_features: str,
+    near_features: str,
+    out_table: str,
+) -> None:
+    require_allow_write()
+    require_gp_output_root_mandatory()
+    inf = validate_input_path_optional(in_features, "in_features")
+    nf = validate_input_path_optional(near_features, "near_features")
+    out = validate_gp_output_path(out_table, "out_table")
+    arcpy.analysis.GenerateNearTable(inf, nf, out)  # type: ignore[attr-defined]

@@ -50,6 +50,10 @@ python -m arcgis_pro_mcp
 
 **地图/图层制图：** `arcgis_pro_set_map_spatial_reference`、`arcgis_pro_layer_replace_data_source`、`arcgis_pro_apply_symbology_from_layer`、`arcgis_pro_set_layer_scale_range`、`arcgis_pro_toggle_layer_labels`。
 
+**字段与属性写入：** `arcgis_pro_gp_add_field`、`arcgis_pro_gp_delete_field`（原地改 schema，**不**用 `GP_OUTPUT_ROOT`）；`arcgis_pro_da_update_field_constant`（`UpdateCursor` 单字段常量，有行数上限）。
+
+**导出 / 邻近：** `arcgis_pro_gp_export_features`、`arcgis_pro_gp_export_table`（输出在 `GP_OUTPUT_ROOT`）；`arcgis_pro_gp_near`（**会修改输入要素类**，无新输出）；`arcgis_pro_gp_generate_near_table`。
+
 **选择集：** `arcgis_pro_select_layer_by_location`、`arcgis_pro_clear_map_selection`；只读：`arcgis_pro_layer_selection_count`、`arcgis_pro_layer_selection_fids`。
 
 **连接：** `arcgis_pro_add_join`、`arcgis_pro_remove_join`。

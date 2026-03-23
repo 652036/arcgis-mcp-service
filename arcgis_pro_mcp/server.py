@@ -8,7 +8,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from arcgis_pro_mcp import da_read, gp_allowlist, gp_write, workspace_listing
+from arcgis_pro_mcp import da_read, da_write, gp_allowlist, gp_schema, gp_write, workspace_listing
 from arcgis_pro_mcp.paths import (
     normalize_path,
     require_allow_write,
@@ -264,6 +264,13 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_gp_table_select",
         "arcgis_pro_gp_merge",
         "arcgis_pro_gp_project",
+        "arcgis_pro_gp_add_field",
+        "arcgis_pro_gp_delete_field",
+        "arcgis_pro_da_update_field_constant",
+        "arcgis_pro_gp_export_features",
+        "arcgis_pro_gp_export_table",
+        "arcgis_pro_gp_near",
+        "arcgis_pro_gp_generate_near_table",
     ]
     tools_export = [
         "arcgis_pro_export_layout_pdf",
@@ -2213,5 +2220,151 @@ def arcgis_pro_gp_project(
             "in_dataset": normalize_path(in_dataset),
             "out_dataset": normalize_path(out_dataset),
             "out_wkid": int(out_wkid),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_add_field",
+    description=(
+        "management.AddField：原地修改表/要素类结构。须 ALLOW_WRITE；路径受 INPUT_ROOTS 约束（若设置）。"
+        "field_type 为 TEXT/SHORT/LONG/FLOAT/DOUBLE/DATE；TEXT 默认长度 255。"
+    ),
+)
+def arcgis_pro_gp_add_field(
+    in_table: str,
+    field_name: str,
+    field_type: str,
+    field_length: int | None = None,
+) -> str:
+    arcpy = _arcpy()
+    gp_schema.run_add_field(arcpy, in_table, field_name, field_type, field_length)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_table": normalize_path(in_table),
+            "field_name": field_name.strip(),
+            "field_type": field_type.strip().upper(),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_delete_field",
+    description=(
+        "management.DeleteField：删除字段。drop_field 可为单个名称或多个（逗号/分号分隔）。"
+        "禁止删除 OBJECTID/SHAPE 等系统字段。须 ALLOW_WRITE。"
+    ),
+)
+def arcgis_pro_gp_delete_field(in_table: str, drop_field: str) -> str:
+    arcpy = _arcpy()
+    gp_schema.run_delete_field(arcpy, in_table, drop_field)
+    return _json_dumps(
+        {"ok": True, "in_table": normalize_path(in_table), "drop_field": drop_field.strip()},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_da_update_field_constant",
+    description=(
+        "UpdateCursor：将单字段更新为常量（value_string 按字段类型解析；空字符串写 NULL）。"
+        "max_rows_updated 上限 5000；可选 where_clause。须 ALLOW_WRITE。"
+    ),
+)
+def arcgis_pro_da_update_field_constant(
+    dataset_path: str,
+    field_name: str,
+    value_string: str,
+    where_clause: str = "",
+    max_rows_updated: int = 1000,
+) -> str:
+    arcpy = _arcpy()
+    n, truncated = da_write.update_field_constant(
+        arcpy,
+        dataset_path,
+        field_name,
+        value_string,
+        where_clause,
+        max_rows_updated,
+    )
+    return _json_dumps(
+        {
+            "ok": True,
+            "dataset_path": normalize_path(dataset_path),
+            "field_name": field_name.strip(),
+            "rows_updated": n,
+            "truncated": truncated,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_export_features",
+    description="management.ExportFeatures：导出要素；输出须在 GP_OUTPUT_ROOT。须 ALLOW_WRITE。",
+)
+def arcgis_pro_gp_export_features(in_features: str, out_path: str) -> str:
+    arcpy = _arcpy()
+    gp_write.run_export_features(arcpy, in_features, out_path)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_features": normalize_path(in_features),
+            "out_path": normalize_path(out_path),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_export_table",
+    description="management.ExportTable：导出表；输出须在 GP_OUTPUT_ROOT。须 ALLOW_WRITE。",
+)
+def arcgis_pro_gp_export_table(in_table: str, out_path: str) -> str:
+    arcpy = _arcpy()
+    gp_write.run_export_table(arcpy, in_table, out_path)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_table": normalize_path(in_table),
+            "out_path": normalize_path(out_path),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_near",
+    description=(
+        "analysis.Near：在输入要素上写入最近邻距离/ID 等字段（原地修改 in_features，不产生新输出）。"
+        "须 ALLOW_WRITE；路径受 INPUT_ROOTS（若设置）。不使用 GP_OUTPUT_ROOT。"
+    ),
+)
+def arcgis_pro_gp_near(in_features: str, near_features: str) -> str:
+    arcpy = _arcpy()
+    gp_write.run_near(arcpy, in_features, near_features)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_features": normalize_path(in_features),
+            "near_features": normalize_path(near_features),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_generate_near_table",
+    description="analysis.GenerateNearTable：输出邻近关系表，路径须在 GP_OUTPUT_ROOT。须 ALLOW_WRITE。",
+)
+def arcgis_pro_gp_generate_near_table(
+    in_features: str,
+    near_features: str,
+    out_table: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_generate_near_table(arcpy, in_features, near_features, out_table)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_features": normalize_path(in_features),
+            "near_features": normalize_path(near_features),
+            "out_table": normalize_path(out_table),
         },
     )
