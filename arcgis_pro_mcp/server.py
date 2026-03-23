@@ -8,8 +8,9 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from arcgis_pro_mcp import da_read, gp_allowlist, workspace_listing
+from arcgis_pro_mcp import da_read, gp_allowlist, gp_write, workspace_listing
 from arcgis_pro_mcp.paths import (
+    normalize_path,
     require_allow_write,
     validate_input_path_optional,
     validate_output_in_export_root,
@@ -26,7 +27,8 @@ mcp = FastMCP(
     instructions=(
         "通过 ArcPy 自动化 ArcGIS Pro 工程：读/写地图与图层、布局与导出、白名单地理处理。"
         "无法替代 Pro 全部 UI；写入与选择需 ARCGIS_PRO_MCP_ALLOW_WRITE=1。"
-        "导出路径受 ARCGIS_PRO_MCP_EXPORT_ROOT 约束（若设置）；GP 输出可受 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT 约束。"
+        "导出路径受 ARCGIS_PRO_MCP_EXPORT_ROOT 约束（若设置）；"
+        "写入型 GP（Buffer/Clip/Select/CopyFeatures）必须设置 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT 且输出位于其下。"
         "须在 Windows 上使用 Pro 捆绑的 Python。"
     ),
 )
@@ -219,6 +221,8 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_workspace_list_tables",
         "arcgis_pro_da_table_sample",
         "arcgis_pro_da_distinct_values",
+        "arcgis_pro_layer_selection_count",
+        "arcgis_pro_layer_selection_fids",
     ]
     tools_write = [
         "arcgis_pro_save_project",
@@ -235,6 +239,16 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_rename_layer",
         "arcgis_pro_set_map_reference_scale",
         "arcgis_pro_set_map_default_camera",
+        "arcgis_pro_select_layer_by_location",
+        "arcgis_pro_clear_map_selection",
+        "arcgis_pro_gp_buffer",
+        "arcgis_pro_gp_clip",
+        "arcgis_pro_gp_analysis_select",
+        "arcgis_pro_gp_copy_features",
+        "arcgis_pro_add_join",
+        "arcgis_pro_remove_join",
+        "arcgis_pro_update_layout_text_element",
+        "arcgis_pro_set_mapframe_extent",
     ]
     tools_export = [
         "arcgis_pro_export_layout_pdf",
@@ -1405,3 +1419,422 @@ def arcgis_pro_set_map_default_camera(
     return _json_dumps(
         {"ok": True, "aprx_path": path, "map_name": map_name, "updated": updated},
     )
+
+
+_OVERLAP_LOCATION = frozenset(
+    {
+        "INTERSECT",
+        "WITHIN_A_DISTANCE",
+        "WITHIN_A_DISTANCE_GEODESIC",
+        "WITHIN_A_DISTANCE_3D",
+        "CONTAINS",
+        "COMPLETELY_CONTAINS",
+        "COMPLETELY_WITHIN",
+        "HAVE_THEIR_CENTER_IN",
+        "SHARE_A_LINE_SEGMENT_WITH",
+        "CROSSED_BY_THE_OUTLINE_OF",
+        "BOUNDARY_TOUCHES",
+        "ARE_IDENTICAL_TO",
+        "TOUCHES",
+        "OVERLAP",
+        "CROSSES",
+        "WITHIN",
+    },
+)
+_DISTANCE_OVERLAP = frozenset(
+    {"WITHIN_A_DISTANCE", "WITHIN_A_DISTANCE_GEODESIC", "WITHIN_A_DISTANCE_3D"},
+)
+_JOIN_TYPES = frozenset({"KEEP_ALL", "KEEP_COMMON"})
+
+
+@mcp.tool(
+    name="arcgis_pro_select_layer_by_location",
+    description=(
+        "按位置选择：SelectLayerByLocation，输入与选择图层须在同一地图内。"
+        "overlap_type 已白名单；距离类关系必须提供 search_distance（如 \"500 Meters\"）。需 ALLOW_WRITE。"
+    ),
+)
+def arcgis_pro_select_layer_by_location(
+    aprx_path: str,
+    map_name: str,
+    input_layer_name: str,
+    overlap_type: str,
+    selecting_layer_name: str,
+    search_distance: str = "",
+    selection_type: str = "NEW_SELECTION",
+    invert_spatial_relationship: bool = False,
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    input_lyr = _find_layer(m, input_layer_name)
+    sel_lyr = _find_layer(m, selecting_layer_name)
+    ov = overlap_type.strip().upper()
+    if ov not in _OVERLAP_LOCATION:
+        raise RuntimeError(f"不支持的 overlap_type，可选示例：{sorted(_OVERLAP_LOCATION)}")
+    sd = (search_distance or "").strip()
+    if ov in _DISTANCE_OVERLAP and not sd:
+        raise RuntimeError("当前 overlap_type 必须提供 search_distance")
+    st = selection_type.strip().upper()
+    if st not in _SELECTION_TYPES:
+        raise RuntimeError(f"非法 selection_type，可选：{sorted(_SELECTION_TYPES)}")
+    inv = "INVERT" if invert_spatial_relationship else "NOT_INVERT"
+    arcpy.management.SelectLayerByLocation(
+        input_lyr,
+        ov,
+        sel_lyr,
+        sd,
+        st,
+        inv,
+    )
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "map_name": map_name,
+            "input_layer_name": input_layer_name,
+            "selecting_layer_name": selecting_layer_name,
+            "overlap_type": ov,
+            "selection_type": st,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_clear_map_selection",
+    description="清除地图上要素图层的选择集（每层执行 CLEAR_SELECTION）。scope=all_layers 或指定 layer_name。需 ALLOW_WRITE。",
+)
+def arcgis_pro_clear_map_selection(
+    aprx_path: str,
+    map_name: str,
+    scope: str,
+    layer_name: str = "",
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    sc = scope.strip().lower()
+    cleared = 0
+    if sc == "layer":
+        ln = layer_name.strip()
+        if not ln:
+            raise RuntimeError("scope=layer 时必须提供 layer_name")
+        lyr = _find_layer(m, ln)
+        arcpy.management.SelectLayerByAttribute(lyr, "CLEAR_SELECTION", "")
+        cleared = 1
+    elif sc == "all_layers":
+        for lyr in m.listLayers():
+            if lyr.isGroupLayer:
+                continue
+            try:
+                if lyr.isFeatureLayer:
+                    arcpy.management.SelectLayerByAttribute(lyr, "CLEAR_SELECTION", "")
+                    cleared += 1
+            except Exception:  # noqa: BLE001
+                pass
+    else:
+        raise RuntimeError('scope 须为 "layer" 或 "all_layers"')
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "layers_cleared": cleared},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_layer_selection_count",
+    description="返回图层当前选择集要素数（GetCount；有选择集时计数为选中数量）。只读。",
+)
+def arcgis_pro_layer_selection_count(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+) -> str:
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    cnt = gp_allowlist.gp_get_count_layer(arcpy, lyr)
+    return _json_dumps(
+        {
+            "aprx_path": path,
+            "map_name": map_name,
+            "layer_name": layer_name,
+            "selected_or_total_count": cnt,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_layer_selection_fids",
+    description="列出当前选择集中的 OID（OID@），最多 max_fids 条。无选择时可能返回空列表。只读。",
+)
+def arcgis_pro_layer_selection_fids(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    max_fids: int = 2000,
+) -> str:
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    cap = max(1, min(int(max_fids), 50_000))
+    fids: list[Any] = []
+    truncated = False
+    with arcpy.da.SearchCursor(lyr, ["OID@"], None) as cur:  # type: ignore[attr-defined]
+        for i, row in enumerate(cur):
+            if i >= cap:
+                truncated = True
+                break
+            fids.append(row[0])
+    return _json_dumps(
+        {
+            "aprx_path": path,
+            "map_name": map_name,
+            "layer_name": layer_name,
+            "fids": fids,
+            "truncated": truncated,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_buffer",
+    description=(
+        "analysis.Buffer：输出须位于 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT（该变量必须已设置）。"
+        "须 ALLOW_WRITE；输入路径受 INPUT_ROOTS 约束（若设置）。"
+    ),
+)
+def arcgis_pro_gp_buffer(
+    in_features: str,
+    out_feature_class: str,
+    buffer_distance_or_field: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_buffer(arcpy, in_features, out_feature_class, buffer_distance_or_field)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_features": validate_input_path_optional(in_features, "in_features"),
+            "out_feature_class": normalize_path(out_feature_class),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_clip",
+    description="analysis.Clip：输出须在 GP_OUTPUT_ROOT（必填）；须 ALLOW_WRITE。",
+)
+def arcgis_pro_gp_clip(
+    in_features: str,
+    clip_features: str,
+    out_feature_class: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_clip(arcpy, in_features, clip_features, out_feature_class)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_features": validate_input_path_optional(in_features, "in_features"),
+            "clip_features": validate_input_path_optional(clip_features, "clip_features"),
+            "out_feature_class": normalize_path(out_feature_class),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_analysis_select",
+    description="analysis.Select：按 where_clause 子集输出要素类；输出须在 GP_OUTPUT_ROOT；须 ALLOW_WRITE。",
+)
+def arcgis_pro_gp_analysis_select(
+    in_features: str,
+    out_feature_class: str,
+    where_clause: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_write.run_select(arcpy, in_features, out_feature_class, where_clause)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_features": validate_input_path_optional(in_features, "in_features"),
+            "out_feature_class": normalize_path(out_feature_class),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_copy_features",
+    description="management.CopyFeatures：复制到 GP_OUTPUT_ROOT 下；须 ALLOW_WRITE 且配置 GP_OUTPUT_ROOT。",
+)
+def arcgis_pro_gp_copy_features(in_features: str, out_feature_class: str) -> str:
+    arcpy = _arcpy()
+    gp_write.run_copy_features(arcpy, in_features, out_feature_class)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_features": validate_input_path_optional(in_features, "in_features"),
+            "out_feature_class": normalize_path(out_feature_class),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_add_join",
+    description="management.AddJoin：图层字段连接至表路径。join_type 为 KEEP_ALL 或 KEEP_COMMON。需 ALLOW_WRITE。",
+)
+def arcgis_pro_add_join(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    layer_field: str,
+    join_table_path: str,
+    join_field: str,
+    join_type: str = "KEEP_ALL",
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    jt = join_type.strip().upper()
+    if jt not in _JOIN_TYPES:
+        raise RuntimeError(f"join_type 须为 {sorted(_JOIN_TYPES)}")
+    jpath = validate_input_path_optional(join_table_path, "join_table_path")
+    arcpy.management.AddJoin(lyr, layer_field.strip(), jpath, join_field.strip(), jt)
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "map_name": map_name,
+            "layer_name": layer_name,
+            "join_table_path": jpath,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_remove_join",
+    description="management.RemoveJoin：join_name 为空则移除该图层全部连接（行为依 Pro 版本而定）。需 ALLOW_WRITE。",
+)
+def arcgis_pro_remove_join(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    join_name: str = "",
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    jn = join_name.strip()
+    arcpy.management.RemoveJoin(lyr, jn)
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "map_name": map_name,
+            "layer_name": layer_name,
+            "join_name": jn or "(all)",
+        },
+    )
+
+
+def _find_layout_text_element(layout: Any, element_name: str, element_type: str) -> Any:
+    en = element_name.strip()
+    et = element_type.strip().upper()
+    order: list[str]
+    if et == "TEXT_ELEMENT":
+        order = ["TEXT_ELEMENT"]
+    elif et in ("TEXT_GRAPHIC_ELEMENT", "GRAPHIC_ELEMENT"):
+        order = ["TEXT_GRAPHIC_ELEMENT"]
+    elif not et:
+        order = ["TEXT_ELEMENT", "TEXT_GRAPHIC_ELEMENT"]
+    else:
+        raise RuntimeError(
+            'element_type 须为空、TEXT_ELEMENT 或 TEXT_GRAPHIC_ELEMENT（也可用 GRAPHIC_ELEMENT）'
+        )
+    for tt in order:
+        for elm in layout.listElements(tt):
+            if getattr(elm, "name", "") == en:
+                return elm
+    raise RuntimeError(f"未找到布局文本元素 {en!r}，已查：{order}")
+
+
+@mcp.tool(
+    name="arcgis_pro_update_layout_text_element",
+    description=(
+        "修改布局中文本元素的 .text。element_type 可空（依次查 TEXT_ELEMENT、TEXT_GRAPHIC_ELEMENT）。"
+        "若原文含动态文本片段（<dyn…）且未设 allow_dynamic_text_overwrite=true 则拒绝。需 ALLOW_WRITE。"
+    ),
+)
+def arcgis_pro_update_layout_text_element(
+    aprx_path: str,
+    layout_name: str,
+    element_name: str,
+    text: str,
+    element_type: str = "",
+    allow_dynamic_text_overwrite: bool = False,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    layout = _get_layout(project, layout_name)
+    elm = _find_layout_text_element(layout, element_name, element_type)
+    old = getattr(elm, "text", "") or ""
+    if "<dyn" in old.lower() and not allow_dynamic_text_overwrite:
+        raise RuntimeError("检测到动态文本，若需覆盖请设置 allow_dynamic_text_overwrite=true")
+    elm.text = text
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "layout_name": layout_name,
+            "element_name": element_name.strip(),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_set_mapframe_extent",
+    description=(
+        "设置布局中地图框的显示范围（MapFrame.setExtent）。"
+        "坐标为 xmin/ymin/xmax/ymax；spatial_reference_wkid 为空则使用当前地图框空间参考。"
+        "需 ALLOW_WRITE；建议随后 save_project。"
+    ),
+)
+def arcgis_pro_set_mapframe_extent(
+    aprx_path: str,
+    layout_name: str,
+    mapframe_name: str,
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    spatial_reference_wkid: int | None = None,
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    layout = _get_layout(project, layout_name)
+    mf = None
+    for elm in layout.listElements("MAPFRAME_ELEMENT"):
+        if elm.name == mapframe_name:
+            mf = elm
+            break
+    if mf is None:
+        names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
+        raise RuntimeError(f"未找到地图框 {mapframe_name!r}，可选：{names}")
+    ext = arcpy.Extent(float(xmin), float(ymin), float(xmax), float(ymax))  # type: ignore[attr-defined]
+    if spatial_reference_wkid is not None:
+        ext.spatialReference = arcpy.SpatialReference(int(spatial_reference_wkid))  # type: ignore[attr-defined]
+    else:
+        try:
+            ext.spatialReference = mf.map.spatialReference
+        except Exception:  # noqa: BLE001
+            pass
+    mf.setExtent(ext)  # type: ignore[attr-defined]
+    out: dict[str, Any] = {
+        "ok": True,
+        "aprx_path": path,
+        "layout_name": layout_name,
+        "mapframe_name": mapframe_name,
+    }
+    try:
+        out["extent_after"] = _extent_dict(mf.getExtent())
+    except Exception as ex:  # noqa: BLE001
+        out["extent_read_error"] = str(ex)[:300]
+    return _json_dumps(out)

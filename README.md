@@ -17,9 +17,9 @@
 
 | 变量 | 说明 |
 |------|------|
-| `ARCGIS_PRO_MCP_ALLOW_WRITE` | 设为 `1` / `true` / `yes` / `on` 才允许：**保存工程、改图层/组图层/顺序/重命名、参考比例尺与默认 Camera、按属性选择、地图框缩放到书签、添加/移除图层** 等。 |
+| `ARCGIS_PRO_MCP_ALLOW_WRITE` | 设为 `1` / `true` / `yes` / `on` 才允许：**保存工程、改图层/Join、参考比例尺与 Camera、按属性/位置选择、清除选择、写入型 GP（Buffer/Clip/Select/CopyFeatures）、布局文本与地图框范围** 等。 |
 | `ARCGIS_PRO_MCP_EXPORT_ROOT` | 若设置，**所有导出与 saveACopy 的 aprx** 解析后的路径须位于该目录下。 |
-| `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` | 预留：将来写入型 GP 输出路径校验（当前白名单 GP 多为只读）。 |
+| `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` | **必填**（若使用 `arcgis_pro_gp_buffer` / `gp_clip` / `gp_analysis_select` / `gp_copy_features`）：输出要素类路径须位于该绝对根目录下。 |
 | `ARCGIS_PRO_MCP_INPUT_ROOTS` | 若设置，多个根目录用系统路径分隔符分隔（Windows 为 `;`），**工作空间枚举、da 抽样、addDataFromPath、Describe、ListFields、白名单 GP 输入路径**等须落在其一之下。 |
 
 ## 安装与运行
@@ -44,6 +44,14 @@ python -m arcgis_pro_mcp
 **属性表只读抽样：** `arcgis_pro_da_table_sample`、`arcgis_pro_da_distinct_values`。
 
 **白名单 GP（只读类）：** `arcgis_pro_gp_get_count`、`arcgis_pro_gp_get_raster_property`、`arcgis_pro_gp_get_cell_value`、`arcgis_pro_gp_test_schema_lock`、`arcgis_pro_gp_list_registered`。
+
+**白名单 GP（写入类，须同时 `ALLOW_WRITE` + `GP_OUTPUT_ROOT`）：** `arcgis_pro_gp_buffer`、`arcgis_pro_gp_clip`、`arcgis_pro_gp_analysis_select`、`arcgis_pro_gp_copy_features`。
+
+**选择集：** `arcgis_pro_select_layer_by_location`、`arcgis_pro_clear_map_selection`；只读：`arcgis_pro_layer_selection_count`、`arcgis_pro_layer_selection_fids`。
+
+**连接：** `arcgis_pro_add_join`、`arcgis_pro_remove_join`。
+
+**布局写入：** `arcgis_pro_update_layout_text_element`、`arcgis_pro_set_mapframe_extent`。
 
 ### 导出（须绝对路径；受 `EXPORT_ROOT` 约束）
 

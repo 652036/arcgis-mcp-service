@@ -29,6 +29,14 @@ _RASTER_PROPERTIES: frozenset[str] = frozenset(
 )
 
 
+def gp_get_count_layer(arcpy: Any, layer: Any) -> str:
+    r = arcpy.management.GetCount(layer)
+    try:
+        return str(r.getOutput(0))
+    except Exception:  # noqa: BLE001
+        return str(r)
+
+
 def gp_get_count(arcpy: Any, dataset_path: str) -> str:
     r = arcpy.management.GetCount(dataset_path)
     try:
@@ -95,5 +103,21 @@ def list_registered_gp_tools() -> list[dict[str, str]]:
         {
             "name": "arcgis_pro_gp_test_schema_lock",
             "role": "测试数据集是否可获取方案锁（TestSchemaLock）",
+        },
+        {
+            "name": "arcgis_pro_gp_buffer",
+            "role": "Buffer 输出至 GP_OUTPUT_ROOT（须 ALLOW_WRITE）",
+        },
+        {
+            "name": "arcgis_pro_gp_clip",
+            "role": "Clip 输出至 GP_OUTPUT_ROOT",
+        },
+        {
+            "name": "arcgis_pro_gp_analysis_select",
+            "role": "analysis.Select 子集输出至 GP_OUTPUT_ROOT",
+        },
+        {
+            "name": "arcgis_pro_gp_copy_features",
+            "role": "CopyFeatures 输出至 GP_OUTPUT_ROOT",
         },
     ]

@@ -22,3 +22,4 @@ jobs:
           python -m py_compile arcgis_pro_mcp/gp_allowlist.py
           python -m py_compile arcgis_pro_mcp/workspace_listing.py
           python -m py_compile arcgis_pro_mcp/da_read.py
+          python -m py_compile arcgis_pro_mcp/gp_write.py
