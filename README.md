@@ -1,81 +1,54 @@
-# arcgis-mcp-service
+# arcgis-pro-mcp
 
-本仓库提供 **两个** 独立的 MCP 服务，可按需选用。
+基于 [Model Context Protocol](https://modelcontextprotocol.io) 的 **ArcGIS Pro** 工具服务：通过 **ArcPy** 读取本机 `.aprx` 工程中的地图、布局与图层。
 
----
+## 环境要求
 
-## 1. ArcGIS REST（Node / TypeScript）
+- Windows，已安装 **ArcGIS Pro**
+- 使用 **Pro 自带的 Python**（该环境提供 `arcpy`），例如：
 
-面向 **GeocodeServer** 与 **要素图层 REST**（与是否安装 ArcGIS Pro 无关）：地理编码、图层 `query`、元数据等。
-
-**依赖：** Node.js 18+  
-
-```bash
-npm install
-npm start
+```text
+"C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe"
 ```
 
-| 环境变量 | 说明 |
-|----------|------|
-| `ARCGIS_TOKEN` | 可选，作为 `token` 附加到 REST 请求 |
-| `ARCGIS_GEOCODE_URL` | 可选，GeocodeServer 根地址；默认 World Geocoding |
-
-**工具：** `arcgis_geocode`、`arcgis_reverse_geocode`、`arcgis_geocode_suggest`、`arcgis_layer_metadata`、`arcgis_query_layer`
-
----
-
-## 2. ArcGIS Pro / Web 地图（Python）
-
-目录：`arcgis-pro-mcp/`
-
-- **ArcGIS Pro**：通过 **ArcPy** 读取本机 `.aprx` 中的地图、布局、图层（**必须在已安装 ArcGIS Pro 的 Windows 上，用 Pro 自带的 Python 启动**）。
-- **Map（Web Map）**：通过 **ArcGIS Online / Portal Sharing REST** 拉取 Web Map JSON、条目信息与搜索（任意平台，需网络；私有内容配 token）。
+## 安装
 
 ```bash
-cd arcgis-pro-mcp
 pip install -e .
+```
+
+## 运行
+
+```bash
+arcgis-pro-mcp
+# 或
 python -m arcgis_pro_mcp
 ```
 
-| 环境变量 | 说明 |
-|----------|------|
-| `ARCGIS_PORTAL_URL` | 可选，默认 `https://www.arcgis.com/sharing/rest` |
-| `ARCGIS_TOKEN` / `ARCGIS_PORTAL_TOKEN` | 可选，访问私有 Portal 内容 |
+务必用上面的 Pro 解释器执行，否则无法导入 `arcpy`。
 
-**Pro（ArcPy）工具：** `arcgis_pro_list_maps`、`arcgis_pro_list_layouts`、`arcgis_pro_list_layers`  
+## MCP 工具
 
-**Portal / Web Map 工具：** `arcgis_portal_webmap_json`、`arcgis_portal_item_metadata`、`arcgis_portal_search_items`
+| 工具 | 说明 |
+|------|------|
+| `arcgis_pro_list_maps` | 列出工程内所有地图名称 |
+| `arcgis_pro_list_layouts` | 列出所有布局名称 |
+| `arcgis_pro_list_layers` | 列出指定地图中的图层及数据源摘要 |
 
-详见 `arcgis-pro-mcp/README.md`。
+## Cursor 示例（`.cursor/mcp.json`）
 
----
-
-## Cursor 配置示例
-
-**REST（TypeScript）：**
+将 `command` 指向本机 Pro 的 `python.exe`，`args` 使用本仓库的模块或已安装的包：
 
 ```json
 {
   "mcpServers": {
-    "arcgis-rest": {
-      "command": "npx",
-      "args": ["tsx", "/绝对路径/本仓库/src/index.ts"],
-      "env": { "ARCGIS_TOKEN": "" }
-    }
-  }
-}
-```
-
-**Pro / Web 地图（Python，Pro 用户请把 `command` 换成 Pro 自带 `python.exe`）：**
-
-```json
-{
-  "mcpServers": {
-    "arcgis-pro-map": {
-      "command": "python3",
+    "arcgis-pro": {
+      "command": "C:\\Program Files\\ArcGIS\\Pro\\bin\\Python\\envs\\arcgispro-py3\\python.exe",
       "args": ["-m", "arcgis_pro_mcp"],
-      "cwd": "/绝对路径/本仓库/arcgis-pro-mcp"
+      "cwd": "C:\\绝对路径\\到\\本仓库"
     }
   }
 }
 ```
+
+若已通过 `pip install -e .` 安装到 Pro 的 Python 环境，可省略 `cwd` 或仅保留工作目录需要时的路径。

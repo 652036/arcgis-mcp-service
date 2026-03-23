@@ -1,21 +1,17 @@
-"""MCP tools for ArcGIS Pro (ArcPy) and Portal / ArcGIS Online web maps."""
+"""MCP tools for ArcGIS Pro via ArcPy."""
 
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
-from urllib.parse import urlencode
 
-import httpx
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP(
-    "arcgis-pro-map",
+    "arcgis-pro",
     instructions=(
-        "提供两类能力：(1) 通过 ArcPy 读取本机 ArcGIS Pro 工程 .aprx 中的地图与图层；"
-        "(2) 通过 ArcGIS Portal / ArcGIS Online Sharing REST 读取 Web Map 条目与搜索内容。"
-        "Pro 相关工具仅在 ArcGIS Pro 捆绑的 Python 中可用。"
+        "通过 ArcPy 读取本机 ArcGIS Pro 工程（.aprx）中的地图、布局与图层。"
+        "必须在已安装 ArcGIS Pro 的 Windows 上使用 Pro 捆绑的 Python 运行。"
     ),
 )
 
@@ -30,40 +26,6 @@ def _arcpy():
             "-m arcgis_pro_mcp"
         ) from e
     return arcpy
-
-
-def _portal_rest_root() -> str:
-    base = os.environ.get("ARCGIS_PORTAL_URL", "https://www.arcgis.com/sharing/rest")
-    return base.rstrip("/")
-
-
-def _portal_token() -> str:
-    return (
-        os.environ.get("ARCGIS_TOKEN", "")
-        or os.environ.get("ARCGIS_PORTAL_TOKEN", "")
-        or ""
-    ).strip()
-
-
-def _portal_get(path: str, params: dict[str, Any]) -> dict[str, Any]:
-    root = _portal_rest_root()
-    q = dict(params)
-    q.setdefault("f", "json")
-    tok = _portal_token()
-    if tok:
-        q.setdefault("token", tok)
-    url = f"{root}{path}?{urlencode(q)}"
-    with httpx.Client(timeout=60.0) as client:
-        r = client.get(url)
-        r.raise_for_status()
-        data = r.json()
-    if isinstance(data, dict) and data.get("error"):
-        err = data["error"]
-        msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-        raise RuntimeError(msg)
-    if not isinstance(data, dict):
-        raise RuntimeError("Unexpected JSON response type")
-    return data
 
 
 @mcp.tool(
@@ -129,44 +91,3 @@ def arcgis_pro_list_layers(aprx_path: str, map_name: str) -> str:
         ensure_ascii=False,
         indent=2,
     )
-
-
-@mcp.tool(
-    name="arcgis_portal_webmap_json",
-    description=(
-        "获取 ArcGIS Online / Portal 上 Web Map 类型条目的 data JSON（operationalLayers、basemap 等）。"
-        "item_id 为条目的 ID。公开地图可无 token；私有内容需配置 ARCGIS_TOKEN。"
-    ),
-)
-def arcgis_portal_webmap_json(item_id: str) -> str:
-    iid = item_id.strip()
-    data = _portal_get(f"/content/items/{iid}/data", {})
-    return json.dumps(data, ensure_ascii=False, indent=2)
-
-
-@mcp.tool(
-    name="arcgis_portal_item_metadata",
-    description="获取内容条目的元数据（标题、类型、url、extent 等），对应 /content/items/{id}。",
-)
-def arcgis_portal_item_metadata(item_id: str) -> str:
-    iid = item_id.strip()
-    data = _portal_get(f"/content/items/{iid}", {})
-    return json.dumps(data, ensure_ascii=False, indent=2)
-
-
-@mcp.tool(
-    name="arcgis_portal_search_items",
-    description='在 Portal / ArcGIS Online 上搜索条目（q 语法与 REST search 一致，如 type:"Web Map"）。',
-)
-def arcgis_portal_search_items(
-    q: str,
-    num_results: int = 10,
-    start: int = 1,
-) -> str:
-    n = max(1, min(int(num_results), 100))
-    s = max(1, int(start))
-    data = _portal_get(
-        "/search",
-        {"q": q.strip(), "num": n, "start": s},
-    )
-    return json.dumps(data, ensure_ascii=False, indent=2)
