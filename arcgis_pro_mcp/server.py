@@ -8,11 +8,33 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+
+def _json_dumps(data: Any) -> str:
+    return json.dumps(data, ensure_ascii=False, indent=2, default=str)
+
+
+def _validate_export_pdf_path(out_path: str) -> None:
+    if not os.path.isabs(out_path):
+        raise RuntimeError("output_pdf_path 必须为绝对路径")
+    root = os.environ.get("ARCGIS_PRO_MCP_EXPORT_ROOT", "").strip().strip('"')
+    if not root:
+        return
+    root_real = os.path.realpath(os.path.expanduser(root))
+    out_real = os.path.realpath(os.path.expanduser(out_path))
+    if not root_real:
+        return
+    sep = os.sep
+    prefix = root_real.rstrip(sep) + sep
+    if not (out_real == root_real or out_real.lower().startswith(prefix.lower())):
+        raise RuntimeError(
+            f"output_pdf_path 必须位于 ARCGIS_PRO_MCP_EXPORT_ROOT 内：{root_real}"
+        )
+
 mcp = FastMCP(
     "arcgis-pro",
     instructions=(
         "通过 ArcPy 读取与导出本机 ArcGIS Pro 工程（.aprx）：地图、表、书签、坐标系、布局元素、"
-        "地图框范围、损坏数据源，以及将布局导出为 PDF。"
+        "地图框范围、损坏数据源，以及将布局导出为 PDF（可配置 ARCGIS_PRO_MCP_EXPORT_ROOT 限制导出目录）。"
         "必须在已安装 ArcGIS Pro 的 Windows 上使用 Pro 捆绑的 Python 运行。"
     ),
 )
@@ -33,6 +55,8 @@ def _arcpy():
 def _open_project(aprx_path: str) -> tuple[Any, Any, str]:
     arcpy = _arcpy()
     path = aprx_path.strip().strip('"')
+    if not path:
+        raise RuntimeError("aprx_path 不能为空")
     project = arcpy.mp.ArcGISProject(path)
     return arcpy, project, path
 
@@ -94,6 +118,46 @@ def _extent_dict(ext: Any) -> dict[str, Any]:
     return d
 
 
+def _describe_summary(arcpy: Any, dataset_path: str) -> dict[str, Any]:
+    dobj = arcpy.Describe(dataset_path)
+    out: dict[str, Any] = {}
+    for attr in (
+        "name",
+        "baseName",
+        "catalogPath",
+        "path",
+        "file",
+        "dataType",
+        "category",
+        "workspacePath",
+        "shapeType",
+        "hasSpatialIndex",
+        "hasM",
+        "hasZ",
+        "length",
+        "areaFieldName",
+        "geometryType",
+    ):
+        try:
+            v = getattr(dobj, attr, None)
+            if v is not None and not callable(v):
+                if isinstance(v, (str, int, float, bool)):
+                    out[attr] = v
+                else:
+                    out[attr] = str(v)[:1000]
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        out["extent"] = _extent_dict(dobj.extent)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        out["spatial_reference"] = _spatial_ref_dict(dobj.spatialReference)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 @mcp.tool(
     name="arcgis_pro_environment_info",
     description=(
@@ -115,7 +179,7 @@ def arcgis_pro_environment_info() -> str:
         info["product_info"] = arcpy.ProductInfo()
     except Exception as ex:  # noqa: BLE001
         info["product_info_error"] = str(ex)[:500]
-    return json.dumps(info, ensure_ascii=False, indent=2)
+    return _json_dumps(info)
 
 
 @mcp.tool(
@@ -159,6 +223,84 @@ def arcgis_pro_list_reports(aprx_path: str) -> str:
 
 
 @mcp.tool(
+    name="arcgis_pro_describe",
+    description=(
+        "对数据集、图层数据源或工作空间路径执行 arcpy.Describe，返回常用属性子集（类型、范围、空间参考等）。"
+        "dataset_path 可为要素类、栅格、图层数据源字符串、GDB 路径等。"
+    ),
+)
+def arcgis_pro_describe(dataset_path: str) -> str:
+    arcpy = _arcpy()
+    p = dataset_path.strip().strip('"')
+    if not p:
+        raise RuntimeError("dataset_path 不能为空")
+    try:
+        summary = _describe_summary(arcpy, p)
+    except Exception as ex:  # noqa: BLE001
+        raise RuntimeError(str(ex)[:800]) from ex
+    return _json_dumps({"dataset_path": p, "describe": summary})
+
+
+@mcp.tool(
+    name="arcgis_pro_list_fields",
+    description="列出表或要素类的字段：名称、类型、别名、长度、精度、是否可空等（arcpy.ListFields）。",
+)
+def arcgis_pro_list_fields(dataset_path: str) -> str:
+    arcpy = _arcpy()
+    p = dataset_path.strip().strip('"')
+    if not p:
+        raise RuntimeError("dataset_path 不能为空")
+    rows: list[dict[str, Any]] = []
+    try:
+        for f in arcpy.ListFields(p):
+            row: dict[str, Any] = {"name": f.name, "type": f.type}
+            for attr in ("aliasName", "length", "precision", "scale", "isNullable", "editable", "required"):
+                try:
+                    row[attr] = getattr(f, attr, None)
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                dom = f.domain
+                if dom:
+                    row["domain"] = str(dom)[:500]
+            except Exception:  # noqa: BLE001
+                pass
+            rows.append(row)
+    except Exception as ex:  # noqa: BLE001
+        raise RuntimeError(str(ex)[:800]) from ex
+    return _json_dumps({"dataset_path": p, "fields": rows, "field_count": len(rows)})
+
+
+@mcp.tool(
+    name="arcgis_pro_project_connections",
+    description=(
+        "列出 .aprx 工程中的文件夹连接、数据库连接、工具箱等（取决于当前 Pro 版本的 API）。"
+        "用于检查工程引用的外部路径。"
+    ),
+)
+def arcgis_pro_project_connections(aprx_path: str) -> str:
+    _, project, path = _open_project(aprx_path)
+    out: dict[str, Any] = {"aprx_path": path}
+    specs = (
+        ("listFolderConnections", "folder_connections"),
+        ("listDatabases", "databases"),
+        ("listToolboxes", "toolboxes"),
+        ("listWorkspaces", "workspaces"),
+    )
+    for meth, key in specs:
+        if not hasattr(project, meth):
+            out[key] = []
+            continue
+        try:
+            items = getattr(project, meth)()
+            out[key] = [str(x) for x in (items or [])]
+        except Exception as ex:  # noqa: BLE001
+            out[key] = []
+            out[f"{key}_error"] = str(ex)[:500]
+    return _json_dumps(out)
+
+
+@mcp.tool(
     name="arcgis_pro_project_summary",
     description="工程概览：地图数、布局数、报表数（若支持）、损坏数据源条目（可限制条数）。",
 )
@@ -173,7 +315,10 @@ def arcgis_pro_project_summary(
     if hasattr(project, "listReports"):
         reports = [r.name for r in project.listReports()]  # type: ignore[attr-defined]
 
-    cap = max(0, min(int(max_broken_list), 500))
+    try:
+        cap = max(0, min(int(max_broken_list), 500))
+    except (TypeError, ValueError):
+        cap = 50
     broken_items: list[dict[str, Any]] = []
     try:
         broken_layers = project.listBrokenDataSources()
@@ -326,7 +471,7 @@ def arcgis_pro_map_camera(aprx_path: str, map_name: str) -> str:
         try:
             v = getattr(cam, attr, None)
             if v is not None:
-                out[attr] = float(v) if attr == "scale" else v
+                out[attr] = float(v)
         except Exception:  # noqa: BLE001
             pass
     try:
@@ -514,8 +659,9 @@ def arcgis_pro_mapframe_extent(
     name="arcgis_pro_export_layout_pdf",
     description=(
         "将指定布局导出为 PDF 文件（对应 Pro 中布局的 exportToPDF）。"
-        "output_pdf_path 必须为可写的本地绝对路径；若文件已存在可能被覆盖。"
-        "建议在导出前关闭正在独占打开该 .aprx 的 Pro 会话，或确认无写入冲突。"
+        "output_pdf_path 必须为绝对路径；若设置环境变量 ARCGIS_PRO_MCP_EXPORT_ROOT，"
+        "则导出路径解析后必须位于该目录下。若文件已存在可能被覆盖。"
+        "建议在导出前确认 .aprx 无独占写入冲突。"
     ),
 )
 def arcgis_pro_export_layout_pdf(
@@ -529,10 +675,16 @@ def arcgis_pro_export_layout_pdf(
     out_path = os.path.normpath(output_pdf_path.strip().strip('"'))
     if not out_path.lower().endswith(".pdf"):
         raise RuntimeError("output_pdf_path 应以 .pdf 结尾")
-    dpi = max(72, min(int(resolution_dpi), 960))
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    _validate_export_pdf_path(out_path)
+    try:
+        dpi = max(72, min(int(resolution_dpi), 960))
+    except (TypeError, ValueError) as e:
+        raise RuntimeError("resolution_dpi 必须为整数") from e
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     layout.exportToPDF(out_path, resolution=dpi)  # type: ignore[attr-defined]
-    return json.dumps(
+    return _json_dumps(
         {
             "ok": True,
             "aprx_path": path,
@@ -540,6 +692,4 @@ def arcgis_pro_export_layout_pdf(
             "output_pdf_path": out_path,
             "resolution_dpi": dpi,
         },
-        ensure_ascii=False,
-        indent=2,
     )
