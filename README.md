@@ -43,7 +43,7 @@ python -m arcgis_pro_mcp
 
 **属性表只读抽样：** `arcgis_pro_da_table_sample`、`arcgis_pro_da_distinct_values`。
 
-**白名单 GP（只读类）：** `arcgis_pro_gp_get_count`、`gp_get_raster_property`、`gp_get_cell_value`、`gp_test_schema_lock`、`gp_list_registered`。
+**白名单 GP（只读类）：** `arcgis_pro_gp_get_count`、`arcgis_pro_gp_get_raster_property`、`arcgis_pro_gp_get_cell_value`、`arcgis_pro_gp_test_schema_lock`、`arcgis_pro_gp_list_registered`。
 
 ### 导出（须绝对路径；受 `EXPORT_ROOT` 约束）
 
