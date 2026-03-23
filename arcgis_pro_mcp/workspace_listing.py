@@ -1,7 +1,8 @@
-"""Read-only workspace listing (ListFeatureClasses / ListRasters / ListTables)."""
+"""Read-only workspace listing helpers for common workspace enumeration tasks."""
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from contextlib import contextmanager
 from typing import Any
@@ -84,3 +85,67 @@ def list_tables(
     with _workspace_ctx(arcpy, workspace_path):
         names = arcpy.ListTables(wc) or []
     return [str(n) for n in names[:cap]]
+
+
+def list_datasets(
+    arcpy: Any,
+    workspace_path: str,
+    wild_card: str = "*",
+    max_items: int = 200,
+) -> list[str]:
+    """List datasets in the current workspace."""
+    cap = max(1, min(int(max_items), 2000))
+    wc = _sanitize_wildcard(wild_card)
+    with _workspace_ctx(arcpy, workspace_path):
+        names = arcpy.ListDatasets(wc) or []
+    return [str(n) for n in names[:cap]]
+
+
+def list_feature_datasets(
+    arcpy: Any,
+    workspace_path: str,
+    wild_card: str = "*",
+    max_items: int = 200,
+) -> list[str]:
+    """List feature datasets in the current workspace."""
+    cap = max(1, min(int(max_items), 2000))
+    wc = _sanitize_wildcard(wild_card)
+    with _workspace_ctx(arcpy, workspace_path):
+        names = arcpy.ListDatasets(wc, "Feature") or []
+    return [str(n) for n in names[:cap]]
+
+
+def list_domains(
+    arcpy: Any,
+    workspace_path: str,
+    wild_card: str = "*",
+    max_items: int = 200,
+) -> list[dict[str, Any]]:
+    """List geodatabase domains in a compact, read-only form."""
+    cap = max(1, min(int(max_items), 2000))
+    wc = _sanitize_wildcard(wild_card)
+    rows: list[dict[str, Any]] = []
+    with _workspace_ctx(arcpy, workspace_path):
+        domains = getattr(arcpy.da, "ListDomains")(workspace_path) or []
+    for dom in domains:
+        name = str(getattr(dom, "name", ""))
+        if wc != "*" and not fnmatch.fnmatchcase(name, wc):
+            continue
+        row: dict[str, Any] = {"name": name}
+        for attr in ("domainType", "fieldType", "splitPolicy", "mergePolicy", "description"):
+            try:
+                value = getattr(dom, attr, None)
+                if value is not None:
+                    row[attr] = value
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            coded_values = getattr(dom, "codedValues", None)
+            if coded_values is not None:
+                row["coded_value_count"] = len(coded_values)
+        except Exception:  # noqa: BLE001
+            pass
+        rows.append(row)
+        if len(rows) >= cap:
+            break
+    return rows

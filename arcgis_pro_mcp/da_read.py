@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 _MAX_WHERE = 8000
+_MAX_ORDER_BY = 2000
 _MAX_CELL = 2000
 _SKIP_TYPES = frozenset({"Geometry", "Raster"})
 
@@ -67,6 +68,69 @@ def table_sample(
                     s = str(val)
                     d[name] = s if len(s) <= _MAX_CELL else s[: _MAX_CELL] + "…"
             rows_out.append(d)
+    return rows_out
+
+
+def query_rows(
+    arcpy: Any,
+    dataset_path: str,
+    fields: list[str],
+    where_clause: str = "",
+    order_by: str = "",
+    max_rows: int = 100,
+    offset: int = 0,
+    include_shape_wkt: bool = False,
+) -> list[dict[str, Any]]:
+    if not fields:
+        raise RuntimeError("fields 涓嶈兘涓虹┖锛屼笖涓嶅厑璁镐娇鐢?*")
+    w = (where_clause or "").strip()
+    if len(w) > _MAX_WHERE:
+        raise RuntimeError("where_clause 杩囬暱")
+    ob = (order_by or "").strip()
+    if len(ob) > _MAX_ORDER_BY:
+        raise RuntimeError("order_by 杩囬暱")
+    cap = max(1, min(int(max_rows), 1000))
+    skip = max(0, min(int(offset), 1_000_000))
+    fnames = [f.strip() for f in fields if f.strip()]
+    if not fnames:
+        raise RuntimeError("fields 鏃犳晥")
+    for f in fnames:
+        if f.upper().startswith("SHAPE@"):
+            raise RuntimeError("鍑犱綍璇蜂娇鐢ㄥ弬鏁?include_shape_wkt=true锛屽嬁鍦?fields 涓紶鍏?SHAPE@*")
+    _field_names_exist(arcpy, dataset_path, fnames)
+    types = _field_type_map(arcpy, dataset_path)
+    cursor_fields: list[str] = []
+    for f in fnames:
+        t = types.get(f, "")
+        if t in _SKIP_TYPES:
+            raise RuntimeError(f"瀛楁 {f!r} 绫诲瀷 {t} 涓嶅厑璁稿湪姝ゅ伐鍏蜂腑璇诲彇")
+        cursor_fields.append(f)
+    if include_shape_wkt:
+        cursor_fields.append("SHAPE@WKT")
+    sql_clause = (None, ob) if ob else None
+    rows_out: list[dict[str, Any]] = []
+    with arcpy.da.SearchCursor(  # type: ignore[attr-defined]
+        dataset_path,
+        cursor_fields,
+        w or None,
+        sql_clause=sql_clause,
+    ) as cur:
+        for i, row in enumerate(cur):
+            if i < skip:
+                continue
+            d: dict[str, Any] = {}
+            for j, name in enumerate(cursor_fields):
+                val = row[j]
+                if val is None:
+                    d[name] = None
+                elif isinstance(val, (int, float, bool)):
+                    d[name] = val
+                else:
+                    s = str(val)
+                    d[name] = s if len(s) <= _MAX_CELL else s[: _MAX_CELL] + "..."
+            rows_out.append(d)
+            if len(rows_out) >= cap:
+                break
     return rows_out
 
 

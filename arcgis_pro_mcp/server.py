@@ -4,11 +4,27 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from arcgis_pro_mcp import da_read, da_write, gp_allowlist, gp_schema, gp_write, workspace_listing
+from arcgis_pro_mcp import (
+    da_read,
+    da_write,
+    gp_allowlist,
+    gp_analysis,
+    gp_convert,
+    gp_create,
+    gp_generic,
+    gp_network,
+    gp_raster,
+    gp_schema,
+    gp_write,
+    metadata,
+    symbology,
+    workspace_listing,
+)
 from arcgis_pro_mcp.paths import (
     normalize_path,
     require_allow_write,
@@ -60,7 +76,7 @@ def _get_map(project: Any, map_name: str) -> Any:
         if m.name == map_name:
             return m
     available = [m.name for m in project.listMaps()]
-    raise RuntimeError(f"未找到地图 {map_name!r}，可选：{available}")
+    raise RuntimeError("Invalid arguments")
 
 
 def _get_layout(project: Any, layout_name: str) -> Any:
@@ -68,7 +84,7 @@ def _get_layout(project: Any, layout_name: str) -> Any:
         if lyt.name == layout_name:
             return lyt
     available = [lyt.name for lyt in project.listLayouts()]
-    raise RuntimeError(f"未找到布局 {layout_name!r}，可选：{available}")
+    raise RuntimeError("Invalid arguments")
 
 
 def _find_layer(map_obj: Any, layer_name: str) -> Any:
@@ -76,7 +92,151 @@ def _find_layer(map_obj: Any, layer_name: str) -> Any:
         if lyr.name == layer_name:
             return lyr
     names = [x.name for x in map_obj.listLayers()]
-    raise RuntimeError(f"未找到图层 {layer_name!r}，可选：{names}")
+    raise RuntimeError("Invalid arguments")
+
+
+@contextmanager
+def _workspace_ctx(arcpy: Any, workspace_path: str):
+    old = arcpy.env.workspace
+    arcpy.env.workspace = workspace_path
+    try:
+        yield
+    finally:
+        arcpy.env.workspace = old
+
+
+def _sanitize_wild_card(wild_card: str, max_len: int = 120) -> str:
+    wc = wild_card.strip()
+    if len(wc) > max_len:
+        raise RuntimeError("wild_card 杩囬暱")
+    return wc or "*"
+
+
+def _list_workspace_datasets(
+    arcpy: Any,
+    workspace_path: str,
+    dataset_type: str = "",
+    wild_card: str = "*",
+    max_items: int = 200,
+) -> list[str]:
+    cap = max(1, min(int(max_items), 2000))
+    wc = _sanitize_wild_card(wild_card)
+    dt = dataset_type.strip()
+    with _workspace_ctx(arcpy, workspace_path):
+        names = arcpy.ListDatasets(wc, dt or "") or []
+    return [str(n) for n in names[:cap]]
+
+
+def _list_workspace_domains(arcpy: Any, workspace_path: str, max_items: int = 200) -> list[dict[str, Any]]:
+    cap = max(1, min(int(max_items), 2000))
+    try:
+        list_domains = arcpy.da.ListDomains  # type: ignore[attr-defined]
+    except AttributeError:
+        list_domains = getattr(arcpy, "ListDomains", None)
+    if list_domains is None:
+        raise RuntimeError("当前 arcpy 版本不支持 ListDomains")
+    domains = list_domains(workspace_path) or []
+    rows: list[dict[str, Any]] = []
+    for dom in domains[:cap]:
+        row: dict[str, Any] = {}
+        for attr in (
+            "name",
+            "domainType",
+            "fieldType",
+            "splitPolicy",
+            "mergePolicy",
+            "description",
+            "owner",
+        ):
+            try:
+                v = getattr(dom, attr, None)
+                if v is not None:
+                    row[attr] = v
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            coded_values = getattr(dom, "codedValues", None)
+            if coded_values:
+                row["coded_values"] = coded_values
+        except Exception:  # noqa: BLE001
+            pass
+        rows.append(row)
+    return rows
+
+
+_MAX_QUERY_WHERE = 8000
+_MAX_QUERY_CELL = 2000
+
+
+def _sanitize_order_by(order_by: str) -> str:
+    ob = (order_by or "").strip()
+    if not ob:
+        return ""
+    if len(ob) > _MAX_QUERY_WHERE:
+        raise RuntimeError("order_by 杩囬暱")
+    if any(ch in ob for ch in ("\r", "\n", ";")):
+        raise RuntimeError("order_by 涓嶈兘鍖呭惈鎹㈣鎴?鍒嗗彿")
+    return ob
+
+def _validate_view_name(name: str, label: str) -> str:
+    out = (name or "").strip()
+    if not out:
+        raise RuntimeError(f"{label} cannot be empty")
+    if len(out) > 128:
+        raise RuntimeError(f"{label} too long")
+    if any(ch in out for ch in ("\r", "\n", ";", "\\", "/")):
+        raise RuntimeError(f"{label} contains invalid characters")
+    return out
+
+
+def _query_rows(
+    arcpy: Any,
+    dataset_path: str,
+    fields: list[str],
+    where_clause: str = "",
+    order_by: str = "",
+    max_rows: int = 100,
+    offset: int = 0,
+    include_shape_wkt: bool = False,
+) -> list[dict[str, Any]]:
+    w = (where_clause or "").strip()
+    if len(w) > _MAX_QUERY_WHERE:
+        raise RuntimeError("where_clause 杩囬暱")
+    cap = max(1, min(int(max_rows), 500))
+    start = max(0, min(int(offset), 1_000_000))
+    fnames = [f.strip() for f in fields if f.strip()]
+    if not fnames:
+        raise RuntimeError("fields 涓嶈兘涓虹┖")
+    if any(f.upper().startswith("SHAPE@") for f in fnames):
+        raise RuntimeError("fields 涓嶄笉鑳藉寘鍚?SHAPE@*锛岃浣跨敤 include_shape_wkt")
+    valid = {f.name for f in arcpy.ListFields(dataset_path)}
+    missing = [f for f in fnames if f not in valid]
+    if missing:
+        raise RuntimeError("Invalid arguments")
+    cursor_fields = list(fnames)
+    if include_shape_wkt:
+        cursor_fields.append("SHAPE@WKT")
+    ob = _sanitize_order_by(order_by)
+    sql_clause = (None, f"ORDER BY {ob}") if ob else None
+    rows_out: list[dict[str, Any]] = []
+    with arcpy.da.SearchCursor(dataset_path, cursor_fields, w or None, sql_clause=sql_clause) as cur:  # type: ignore[attr-defined]
+        for idx, row in enumerate(cur):
+            if idx < start:
+                continue
+            if len(rows_out) >= cap:
+                break
+            d: dict[str, Any] = {}
+            for j, name in enumerate(cursor_fields):
+                val = row[j]
+                if val is None:
+                    d[name] = None
+                elif isinstance(val, (int, float, bool)):
+                    d[name] = val
+                else:
+                    s = str(val)
+                    d[name] = s if len(s) <= _MAX_QUERY_CELL else s[:_MAX_QUERY_CELL] + "..."
+            rows_out.append(d)
+    return rows_out
 
 
 def _spatial_ref_dict(sr: Any) -> dict[str, Any] | None:
@@ -162,10 +322,7 @@ def _describe_summary(arcpy: Any, dataset_path: str) -> dict[str, Any]:
 
 @mcp.tool(
     name="arcgis_pro_environment_info",
-    description=(
-        "返回当前 ArcPy / ArcGIS Pro 安装与产品信息（无需打开 .aprx）。"
-        "用于确认是否使用了 Pro 自带的 Python。"
-    ),
+    description="",
 )
 def arcgis_pro_environment_info() -> str:
     arcpy = _arcpy()
@@ -186,10 +343,7 @@ def arcgis_pro_environment_info() -> str:
 
 @mcp.tool(
     name="arcgis_pro_server_capabilities",
-    description=(
-        "返回当前进程的安全开关与已注册工具分类摘要：是否允许写入、导出根目录是否配置、"
-        "白名单 GP 工具列表等。调用方可据此决定可用能力。"
-    ),
+    description="",
 )
 def arcgis_pro_server_capabilities() -> str:
     write = writes_allowed()
@@ -216,13 +370,26 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_gp_get_cell_value",
         "arcgis_pro_gp_test_schema_lock",
         "arcgis_pro_gp_list_registered",
+        "arcgis_pro_workspace_list_datasets",
+        "arcgis_pro_workspace_list_feature_datasets",
+        "arcgis_pro_workspace_list_domains",
         "arcgis_pro_workspace_list_feature_classes",
         "arcgis_pro_workspace_list_rasters",
         "arcgis_pro_workspace_list_tables",
         "arcgis_pro_da_table_sample",
+        "arcgis_pro_da_query_rows",
         "arcgis_pro_da_distinct_values",
         "arcgis_pro_layer_selection_count",
         "arcgis_pro_layer_selection_fids",
+        "arcgis_pro_get_layer_extent",
+        "arcgis_pro_list_layer_renderers",
+        "arcgis_pro_list_layout_map_frames",
+        "arcgis_pro_list_broken_sources",
+        "arcgis_pro_list_sde_datasets",
+        "arcgis_pro_gp_get_messages",
+        "arcgis_pro_gp_list_toolboxes",
+        "arcgis_pro_gp_list_tools_in_toolbox",
+        "arcgis_pro_get_metadata",
     ]
     tools_write = [
         "arcgis_pro_save_project",
@@ -231,9 +398,15 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_set_layer_transparency",
         "arcgis_pro_set_definition_query",
         "arcgis_pro_select_layer_by_attribute",
+        "arcgis_pro_make_feature_layer",
+        "arcgis_pro_make_table_view",
         "arcgis_pro_mapframe_zoom_to_bookmark",
         "arcgis_pro_add_layer_from_path",
         "arcgis_pro_remove_layer",
+        "arcgis_pro_add_table_from_path",
+        "arcgis_pro_remove_table",
+        "arcgis_pro_rename_map",
+        "arcgis_pro_rename_layout",
         "arcgis_pro_create_group_layer",
         "arcgis_pro_move_layer",
         "arcgis_pro_rename_layer",
@@ -241,10 +414,6 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_set_map_default_camera",
         "arcgis_pro_select_layer_by_location",
         "arcgis_pro_clear_map_selection",
-        "arcgis_pro_gp_buffer",
-        "arcgis_pro_gp_clip",
-        "arcgis_pro_gp_analysis_select",
-        "arcgis_pro_gp_copy_features",
         "arcgis_pro_add_join",
         "arcgis_pro_remove_join",
         "arcgis_pro_update_layout_text_element",
@@ -254,6 +423,14 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_apply_symbology_from_layer",
         "arcgis_pro_set_layer_scale_range",
         "arcgis_pro_toggle_layer_labels",
+        "arcgis_pro_da_update_field_constant",
+        "arcgis_pro_da_insert_features",
+        "arcgis_pro_da_update_features",
+        "arcgis_pro_da_delete_selected",
+        "arcgis_pro_gp_buffer",
+        "arcgis_pro_gp_clip",
+        "arcgis_pro_gp_analysis_select",
+        "arcgis_pro_gp_copy_features",
         "arcgis_pro_gp_dissolve",
         "arcgis_pro_gp_intersect",
         "arcgis_pro_gp_union",
@@ -266,15 +443,106 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_gp_project",
         "arcgis_pro_gp_add_field",
         "arcgis_pro_gp_delete_field",
-        "arcgis_pro_da_update_field_constant",
         "arcgis_pro_gp_export_features",
         "arcgis_pro_gp_export_table",
         "arcgis_pro_gp_near",
         "arcgis_pro_gp_generate_near_table",
+        "arcgis_pro_gp_calculate_field",
+        "arcgis_pro_gp_calculate_geometry",
+        "arcgis_pro_gp_append",
+        "arcgis_pro_gp_delete_features",
+        "arcgis_pro_gp_truncate_table",
+        "arcgis_pro_gp_create_feature_class",
+        "arcgis_pro_gp_create_table",
+        "arcgis_pro_gp_create_file_gdb",
+        "arcgis_pro_gp_create_feature_dataset",
+        "arcgis_pro_gp_copy_feature_class",
+        "arcgis_pro_gp_rename_dataset",
+        "arcgis_pro_gp_delete_dataset",
+        "arcgis_pro_gp_alter_field",
+        "arcgis_pro_gp_import_csv_to_table",
+        "arcgis_pro_gp_table_to_table",
+        "arcgis_pro_gp_xy_table_to_point",
+        "arcgis_pro_gp_json_to_features",
+        "arcgis_pro_gp_features_to_json",
+        "arcgis_pro_gp_kml_to_layer",
+        "arcgis_pro_gp_excel_to_table",
+        "arcgis_pro_gp_table_to_excel",
+        "arcgis_pro_gp_feature_class_to_shapefile",
+        "arcgis_pro_gp_multiple_ring_buffer",
+        "arcgis_pro_gp_feature_to_point",
+        "arcgis_pro_gp_feature_to_line",
+        "arcgis_pro_gp_points_to_line",
+        "arcgis_pro_gp_polygon_to_line",
+        "arcgis_pro_gp_minimum_bounding_geometry",
+        "arcgis_pro_gp_convex_hull",
+        "arcgis_pro_gp_split_by_attributes",
+        "arcgis_pro_gp_identity",
+        "arcgis_pro_gp_symmetrical_difference",
+        "arcgis_pro_gp_count_overlapping_features",
+        "arcgis_pro_gp_repair_geometry",
+        "arcgis_pro_gp_check_geometry",
+        "arcgis_pro_gp_eliminate",
+        "arcgis_pro_gp_multipart_to_singlepart",
+        "arcgis_pro_gp_aggregate_polygons",
+        "arcgis_pro_gp_slope",
+        "arcgis_pro_gp_aspect",
+        "arcgis_pro_gp_hillshade",
+        "arcgis_pro_gp_reclassify",
+        "arcgis_pro_gp_extract_by_mask",
+        "arcgis_pro_gp_extract_by_attributes",
+        "arcgis_pro_gp_zonal_statistics_as_table",
+        "arcgis_pro_gp_kernel_density",
+        "arcgis_pro_gp_point_density",
+        "arcgis_pro_gp_idw",
+        "arcgis_pro_gp_kriging",
+        "arcgis_pro_gp_topo_to_raster",
+        "arcgis_pro_gp_raster_to_polygon",
+        "arcgis_pro_gp_polygon_to_raster",
+        "arcgis_pro_gp_feature_to_raster",
+        "arcgis_pro_gp_raster_calculator",
+        "arcgis_pro_gp_mosaic_to_new_raster",
+        "arcgis_pro_gp_clip_raster",
+        "arcgis_pro_gp_resample",
+        "arcgis_pro_gp_project_raster",
+        "arcgis_pro_gp_nibble",
+        "arcgis_pro_set_unique_value_renderer",
+        "arcgis_pro_set_graduated_colors_renderer",
+        "arcgis_pro_set_graduated_symbols_renderer",
+        "arcgis_pro_set_simple_renderer",
+        "arcgis_pro_set_heatmap_renderer",
+        "arcgis_pro_update_label_expression",
+        "arcgis_pro_set_label_font",
+        "arcgis_pro_set_layout_element_position",
+        "arcgis_pro_set_layout_element_visible",
+        "arcgis_pro_update_legend_items",
+        "arcgis_pro_create_layout",
+        "arcgis_pro_zoom_to_layer",
+        "arcgis_pro_zoom_to_selection",
+        "arcgis_pro_layer_add_field_alias",
+        "arcgis_pro_update_layer_cim",
+        "arcgis_pro_repair_layer_source",
+        "arcgis_pro_create_db_connection",
+        "arcgis_pro_add_basemap",
+        "arcgis_pro_create_map",
+        "arcgis_pro_remove_map",
+        "arcgis_pro_duplicate_map",
+        "arcgis_pro_map_pan_to_extent",
+        "arcgis_pro_set_time_slider",
+        "arcgis_pro_gp_run_tool",
+        "arcgis_pro_na_create_route_layer",
+        "arcgis_pro_na_add_locations",
+        "arcgis_pro_na_solve",
+        "arcgis_pro_na_service_area",
+        "arcgis_pro_na_od_matrix",
+        "arcgis_pro_set_metadata",
+        "arcgis_pro_gp_validate_topology",
     ]
     tools_export = [
         "arcgis_pro_export_layout_pdf",
         "arcgis_pro_export_layout_image",
+        "arcgis_pro_export_report_pdf",
+        "arcgis_pro_export_map_to_image",
     ]
     return _json_dumps(
         {
@@ -302,7 +570,7 @@ def arcgis_pro_server_capabilities() -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_maps",
-    description="列出指定 .aprx 工程内的所有地图名称。必须在 ArcGIS Pro 的 Python 环境中运行。",
+    description="",
 )
 def arcgis_pro_list_maps(aprx_path: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -312,7 +580,7 @@ def arcgis_pro_list_maps(aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_layouts",
-    description="列出 .aprx 中所有布局（Layout）名称。需 ArcGIS Pro Python。",
+    description="",
 )
 def arcgis_pro_list_layouts(aprx_path: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -322,7 +590,7 @@ def arcgis_pro_list_layouts(aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_reports",
-    description="列出工程中的报表（Report）名称。部分旧版本 Pro 可能不支持 listReports。",
+    description="",
 )
 def arcgis_pro_list_reports(aprx_path: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -342,10 +610,7 @@ def arcgis_pro_list_reports(aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_describe",
-    description=(
-        "对数据集、图层数据源或工作空间路径执行 arcpy.Describe，返回常用属性子集（类型、范围、空间参考等）。"
-        "dataset_path 可为要素类、栅格、图层数据源字符串、GDB 路径等。"
-    ),
+    description="",
 )
 def arcgis_pro_describe(dataset_path: str) -> str:
     arcpy = _arcpy()
@@ -361,7 +626,7 @@ def arcgis_pro_describe(dataset_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_fields",
-    description="列出表或要素类的字段：名称、类型、别名、长度、精度、是否可空等（arcpy.ListFields）。",
+    description="",
 )
 def arcgis_pro_list_fields(dataset_path: str) -> str:
     arcpy = _arcpy()
@@ -391,10 +656,7 @@ def arcgis_pro_list_fields(dataset_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_project_connections",
-    description=(
-        "列出 .aprx 工程中的文件夹连接、数据库连接、工具箱等（取决于当前 Pro 版本的 API）。"
-        "用于检查工程引用的外部路径。"
-    ),
+    description="",
 )
 def arcgis_pro_project_connections(aprx_path: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -420,7 +682,7 @@ def arcgis_pro_project_connections(aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_project_summary",
-    description="工程概览：地图数、布局数、报表数（若支持）、损坏数据源条目（可限制条数）。",
+    description="",
 )
 def arcgis_pro_project_summary(
     aprx_path: str,
@@ -475,9 +737,7 @@ def arcgis_pro_project_summary(
 
 @mcp.tool(
     name="arcgis_pro_list_layers",
-    description=(
-        "列出某一地图中的图层：名称、是否组/栅格/要素图层、可见性，以及非组图层的数据源路径（若可读取）。"
-    ),
+    description="",
 )
 def arcgis_pro_list_layers(aprx_path: str, map_name: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -515,7 +775,7 @@ def arcgis_pro_list_layers(aprx_path: str, map_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_tables",
-    description="列出地图中打开的表（独立表、非图层表视图等，取决于工程内容）。",
+    description="",
 )
 def arcgis_pro_list_tables(aprx_path: str, map_name: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -553,7 +813,7 @@ def arcgis_pro_list_tables(aprx_path: str, map_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_map_spatial_reference",
-    description="读取地图的空间参考（名称、WKID、类型、WKT 片段）。",
+    description="",
 )
 def arcgis_pro_map_spatial_reference(aprx_path: str, map_name: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -572,7 +832,7 @@ def arcgis_pro_map_spatial_reference(aprx_path: str, map_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_map_camera",
-    description="读取地图默认视图（Camera）信息：比例尺、XY 等（若 API 可用）。",
+    description="",
 )
 def arcgis_pro_map_camera(aprx_path: str, map_name: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -606,7 +866,7 @@ def arcgis_pro_map_camera(aprx_path: str, map_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_bookmarks",
-    description="列出地图中的书签名称（及可获取的关联信息）。",
+    description="",
 )
 def arcgis_pro_list_bookmarks(aprx_path: str, map_name: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -645,10 +905,7 @@ def arcgis_pro_list_bookmarks(aprx_path: str, map_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_layer_properties",
-    description=(
-        "查询单个图层的常用制图与数据属性：可见性、透明度、定义查询、符号系统类型、"
-        "是否可编辑等（字段因图层类型而异）。"
-    ),
+    description="",
 )
 def arcgis_pro_layer_properties(
     aprx_path: str,
@@ -705,10 +962,7 @@ def arcgis_pro_layer_properties(
 
 @mcp.tool(
     name="arcgis_pro_list_layout_elements",
-    description=(
-        "列出布局中的元素：类型（如 MAPFRAME_ELEMENT、LEGEND_ELEMENT）、名称。"
-        "可选 element_type 过滤，例如仅列出 MAPFRAME_ELEMENT。"
-    ),
+    description="",
 )
 def arcgis_pro_list_layout_elements(
     aprx_path: str,
@@ -741,7 +995,7 @@ def arcgis_pro_list_layout_elements(
 
 @mcp.tool(
     name="arcgis_pro_mapframe_extent",
-    description="读取布局中指定地图框（Map Frame）的当前范围与比例尺、所关联的地图名。",
+    description="",
 )
 def arcgis_pro_mapframe_extent(
     aprx_path: str,
@@ -757,7 +1011,7 @@ def arcgis_pro_mapframe_extent(
             break
     if mf is None:
         names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
-        raise RuntimeError(f"未找到地图框 {mapframe_name!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
 
     out: dict[str, Any] = {
         "aprx_path": path,
@@ -782,12 +1036,7 @@ def arcgis_pro_mapframe_extent(
 
 @mcp.tool(
     name="arcgis_pro_export_layout_pdf",
-    description=(
-        "将指定布局导出为 PDF 文件（对应 Pro 中布局的 exportToPDF）。"
-        "output_pdf_path 必须为绝对路径；若设置环境变量 ARCGIS_PRO_MCP_EXPORT_ROOT，"
-        "则导出路径解析后必须位于该目录下。若文件已存在可能被覆盖。"
-        "建议在导出前确认 .aprx 无独占写入冲突。"
-    ),
+    description="",
 )
 def arcgis_pro_export_layout_pdf(
     aprx_path: str,
@@ -840,10 +1089,7 @@ def _clamp_dpi(resolution_dpi: int) -> int:
 
 @mcp.tool(
     name="arcgis_pro_export_layout_image",
-    description=(
-        "将布局导出为光栅图：format=png|jpeg|tiff，须使用绝对路径。"
-        "受 ARCGIS_PRO_MCP_EXPORT_ROOT 约束（若设置）。TIFF 可写 world_file。"
-    ),
+    description="",
 )
 def arcgis_pro_export_layout_image(
     aprx_path: str,
@@ -905,7 +1151,7 @@ def arcgis_pro_export_layout_image(
 
 @mcp.tool(
     name="arcgis_pro_save_project",
-    description="保存对当前 .aprx 的内存修改到原文件。需 ARCGIS_PRO_MCP_ALLOW_WRITE=1；注意 Pro 独占打开时可能失败。",
+    description="",
 )
 def arcgis_pro_save_project(aprx_path: str) -> str:
     require_allow_write()
@@ -916,7 +1162,7 @@ def arcgis_pro_save_project(aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_save_project_copy",
-    description="将工程另存为新 .aprx（saveACopy）。输出路径须满足 ARCGIS_PRO_MCP_EXPORT_ROOT（若设置）。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_save_project_copy(aprx_path: str, output_aprx_path: str) -> str:
     require_allow_write()
@@ -935,7 +1181,7 @@ def arcgis_pro_save_project_copy(aprx_path: str, output_aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_set_layer_visible",
-    description="设置图层可见性。修改在 save_project 之前仅存在于内存。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_layer_visible(
     aprx_path: str,
@@ -961,7 +1207,7 @@ def arcgis_pro_set_layer_visible(
 
 @mcp.tool(
     name="arcgis_pro_set_layer_transparency",
-    description="设置图层透明度 0–100。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_layer_transparency(
     aprx_path: str,
@@ -988,7 +1234,7 @@ def arcgis_pro_set_layer_transparency(
 
 @mcp.tool(
     name="arcgis_pro_set_definition_query",
-    description="设置要素图层的定义查询 SQL 字符串。错误 SQL 可能导致图层无要素。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_definition_query(
     aprx_path: str,
@@ -1017,11 +1263,7 @@ def arcgis_pro_set_definition_query(
 
 @mcp.tool(
     name="arcgis_pro_select_layer_by_attribute",
-    description=(
-        "对地图中已存在图层执行 SelectLayerByAttribute。"
-        "selection_type 为固定枚举；where_clause 最长 8000。"
-        "会改变当前地图选择，需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_select_layer_by_attribute(
     aprx_path: str,
@@ -1036,7 +1278,7 @@ def arcgis_pro_select_layer_by_attribute(
     lyr = _find_layer(m, layer_name)
     st = selection_type.strip().upper()
     if st not in _SELECTION_TYPES:
-        raise RuntimeError(f"非法 selection_type，可选：{sorted(_SELECTION_TYPES)}")
+        raise RuntimeError("Invalid arguments")
     wc = where_clause.strip()
     if len(wc) > 8000:
         raise RuntimeError("where_clause 过长")
@@ -1053,11 +1295,60 @@ def arcgis_pro_select_layer_by_attribute(
 
 
 @mcp.tool(
+    name="arcgis_pro_make_feature_layer",
+    description="",
+)
+def arcgis_pro_make_feature_layer(
+    dataset_path: str,
+    out_layer_name: str,
+    where_clause: str = "",
+) -> str:
+    require_allow_write()
+    arcpy = _arcpy()
+    p = validate_input_path_optional(dataset_path, "dataset_path")
+    name = _validate_view_name(out_layer_name, "out_layer_name")
+    wc = (where_clause or "").strip()
+    if len(wc) > 8000:
+        raise RuntimeError("where_clause too long")
+    result = arcpy.management.MakeFeatureLayer(p, name, wc or None)
+    created_name = name
+    try:
+        created_name = str(result.getOutput(0))
+    except Exception:  # noqa: BLE001
+        pass
+    count = gp_allowlist.gp_get_count_layer(arcpy, created_name)
+    return _json_dumps({"ok": True, "dataset_path": p, "layer_name": created_name, "count": count})
+
+
+@mcp.tool(
+    name="arcgis_pro_make_table_view",
+    description="",
+)
+def arcgis_pro_make_table_view(
+    dataset_path: str,
+    out_view_name: str,
+    where_clause: str = "",
+) -> str:
+    require_allow_write()
+    arcpy = _arcpy()
+    p = validate_input_path_optional(dataset_path, "dataset_path")
+    name = _validate_view_name(out_view_name, "out_view_name")
+    wc = (where_clause or "").strip()
+    if len(wc) > 8000:
+        raise RuntimeError("where_clause too long")
+    result = arcpy.management.MakeTableView(p, name, wc or None)
+    created_name = name
+    try:
+        created_name = str(result.getOutput(0))
+    except Exception:  # noqa: BLE001
+        pass
+    count = gp_allowlist.gp_get_count(arcpy, created_name)
+    return _json_dumps({"ok": True, "dataset_path": p, "view_name": created_name, "count": count})
+
+
+@mcp.tool(
     name="arcgis_pro_mapframe_zoom_to_bookmark",
-    description=(
-        "将布局中的地图框缩放到指定书签视图（会改变布局中地图框状态，非纯只读）。"
-        "书签来自该地图框所关联的地图。需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_mapframe_zoom_to_bookmark(
     aprx_path: str,
@@ -1075,7 +1366,7 @@ def arcgis_pro_mapframe_zoom_to_bookmark(
             break
     if mf is None:
         names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
-        raise RuntimeError(f"未找到地图框 {mapframe_name!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
     bkmk = None
     try:
         for b in mf.map.listBookmarks():
@@ -1083,10 +1374,10 @@ def arcgis_pro_mapframe_zoom_to_bookmark(
                 bkmk = b
                 break
     except Exception as ex:  # noqa: BLE001
-        raise RuntimeError(f"读取书签失败：{ex!s}") from ex
+        raise RuntimeError("Invalid arguments") from e
     if bkmk is None:
         names = [b.name for b in mf.map.listBookmarks()]
-        raise RuntimeError(f"未找到书签 {bookmark_name!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
     mf.zoomToBookmark(bkmk)  # type: ignore[attr-defined]
     return _json_dumps(
         {
@@ -1101,7 +1392,7 @@ def arcgis_pro_mapframe_zoom_to_bookmark(
 
 @mcp.tool(
     name="arcgis_pro_add_layer_from_path",
-    description="向地图添加数据（addDataFromPath）。data_path 若配置 ARCGIS_PRO_MCP_INPUT_ROOTS 则须在其下。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_add_layer_from_path(
     aprx_path: str,
@@ -1120,7 +1411,7 @@ def arcgis_pro_add_layer_from_path(
 
 @mcp.tool(
     name="arcgis_pro_remove_layer",
-    description="从地图中移除指定图层（removeLayer）。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_remove_layer(aprx_path: str, map_name: str, layer_name: str) -> str:
     require_allow_write()
@@ -1134,8 +1425,58 @@ def arcgis_pro_remove_layer(aprx_path: str, map_name: str, layer_name: str) -> s
 
 
 @mcp.tool(
+    name="arcgis_pro_add_table_from_path",
+    description="",
+)
+def arcgis_pro_add_table_from_path(
+    aprx_path: str,
+    map_name: str,
+    table_path: str,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    tp = validate_input_path_optional(table_path, "table_path")
+    if not hasattr(m, "addDataFromPath"):
+        raise RuntimeError("当前 Map 对象不支持 addDataFromPath")
+    m.addDataFromPath(tp)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "table_path": tp},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_remove_table",
+    description="",
+)
+def arcgis_pro_remove_table(aprx_path: str, map_name: str, table_name: str) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    if not hasattr(m, "listTables"):
+        raise RuntimeError("当前 Map 对象不支持 listTables")
+    target = None
+    for tbl in m.listTables():  # type: ignore[attr-defined]
+        if tbl.name == table_name:
+            target = tbl
+            break
+    if target is None:
+        names = [tbl.name for tbl in m.listTables()]  # type: ignore[attr-defined]
+        raise RuntimeError("Invalid arguments")
+    if hasattr(m, "removeTable"):
+        m.removeTable(target)  # type: ignore[attr-defined]
+    elif hasattr(m, "removeItem"):
+        m.removeItem(target)  # type: ignore[attr-defined]
+    else:
+        raise RuntimeError("当前 Map 对象不支持移除独立表")
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "removed": table_name},
+    )
+
+
+@mcp.tool(
     name="arcgis_pro_gp_list_registered",
-    description="列出本服务白名单内的地理处理类 MCP 工具及说明。",
+    description="",
 )
 def arcgis_pro_gp_list_registered() -> str:
     return _json_dumps({"gp_tools": gp_allowlist.list_registered_gp_tools()})
@@ -1143,7 +1484,7 @@ def arcgis_pro_gp_list_registered() -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_get_count",
-    description="白名单 GP：GetCount。dataset_path 可受 ARCGIS_PRO_MCP_INPUT_ROOTS 约束。",
+    description="",
 )
 def arcgis_pro_gp_get_count(dataset_path: str) -> str:
     arcpy = _arcpy()
@@ -1154,7 +1495,7 @@ def arcgis_pro_gp_get_count(dataset_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_get_raster_property",
-    description="白名单 GP：GetRasterProperties，property_type 仅允许预置枚举。",
+    description="",
 )
 def arcgis_pro_gp_get_raster_property(
     raster_path: str,
@@ -1170,7 +1511,7 @@ def arcgis_pro_gp_get_raster_property(
 
 @mcp.tool(
     name="arcgis_pro_gp_get_cell_value",
-    description="白名单 GP：GetCellValue。location_xy 为两个数字（空格或逗号分隔），与栅格空间参考一致。",
+    description="",
 )
 def arcgis_pro_gp_get_cell_value(
     raster_path: str,
@@ -1187,7 +1528,7 @@ def arcgis_pro_gp_get_cell_value(
 
 @mcp.tool(
     name="arcgis_pro_gp_test_schema_lock",
-    description="白名单 GP：TestSchemaLock，返回数据集是否可编辑（方案锁）。",
+    description="",
 )
 def arcgis_pro_gp_test_schema_lock(dataset_path: str) -> str:
     arcpy = _arcpy()
@@ -1198,7 +1539,7 @@ def arcgis_pro_gp_test_schema_lock(dataset_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_workspace_list_feature_classes",
-    description="在工作空间中列出要素类（ListFeatureClasses）。路径受 INPUT_ROOTS 约束（若设置）。",
+    description="",
 )
 def arcgis_pro_workspace_list_feature_classes(
     workspace_path: str,
@@ -1217,7 +1558,7 @@ def arcgis_pro_workspace_list_feature_classes(
 
 @mcp.tool(
     name="arcgis_pro_workspace_list_rasters",
-    description="在工作空间中列出栅格（ListRasters）。",
+    description="",
 )
 def arcgis_pro_workspace_list_rasters(
     workspace_path: str,
@@ -1232,7 +1573,7 @@ def arcgis_pro_workspace_list_rasters(
 
 @mcp.tool(
     name="arcgis_pro_workspace_list_tables",
-    description="在工作空间中列出表（ListTables）。",
+    description="",
 )
 def arcgis_pro_workspace_list_tables(
     workspace_path: str,
@@ -1247,10 +1588,7 @@ def arcgis_pro_workspace_list_tables(
 
 @mcp.tool(
     name="arcgis_pro_da_table_sample",
-    description=(
-        "只读 SearchCursor：按字段白名单返回最多 max_rows 行；禁止 *；可选 where_clause；"
-        "include_shape_wkt 时附加 SHAPE@WKT（可能很大，注意 max_rows）。"
-    ),
+    description="",
 )
 def arcgis_pro_da_table_sample(
     dataset_path: str,
@@ -1268,8 +1606,43 @@ def arcgis_pro_da_table_sample(
 
 
 @mcp.tool(
+    name="arcgis_pro_da_query_rows",
+    description="",
+)
+def arcgis_pro_da_query_rows(
+    dataset_path: str,
+    fields: list[str],
+    where_clause: str = "",
+    order_by: str = "",
+    max_rows: int = 100,
+    offset: int = 0,
+    include_shape_wkt: bool = False,
+) -> str:
+    arcpy = _arcpy()
+    p = validate_input_path_optional(dataset_path, "dataset_path")
+    rows = _query_rows(
+        arcpy,
+        p,
+        fields,
+        where_clause,
+        order_by,
+        max_rows,
+        offset,
+        include_shape_wkt,
+    )
+    return _json_dumps(
+        {
+            "dataset_path": p,
+            "field_count": len([f for f in fields if f.strip()]),
+            "row_count": len(rows),
+            "rows": rows,
+        },
+    )
+
+
+@mcp.tool(
     name="arcgis_pro_da_distinct_values",
-    description="只读：对单字段扫描（有上限）收集不重复值，用于快速了解域值分布。",
+    description="",
 )
 def arcgis_pro_da_distinct_values(
     dataset_path: str,
@@ -1298,7 +1671,7 @@ _PLACE_LAYER = frozenset({"BEFORE", "AFTER"})
 
 @mcp.tool(
     name="arcgis_pro_create_group_layer",
-    description="在地图上创建空组图层（createGroupLayer）。需 ALLOW_WRITE；建议随后 save_project。",
+    description="",
 )
 def arcgis_pro_create_group_layer(aprx_path: str, map_name: str, group_layer_name: str) -> str:
     require_allow_write()
@@ -1320,7 +1693,7 @@ def arcgis_pro_create_group_layer(aprx_path: str, map_name: str, group_layer_nam
 
 @mcp.tool(
     name="arcgis_pro_move_layer",
-    description="相对参考图层移动图层顺序（moveLayer），placement 为 BEFORE 或 AFTER。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_move_layer(
     aprx_path: str,
@@ -1336,7 +1709,7 @@ def arcgis_pro_move_layer(
     mov = _find_layer(m, layer_to_move_name)
     pl = placement.strip().upper()
     if pl not in _PLACE_LAYER:
-        raise RuntimeError(f"placement 须为 {sorted(_PLACE_LAYER)}")
+        raise RuntimeError("Invalid arguments")
     m.moveLayer(ref, mov, pl)  # type: ignore[attr-defined]
     return _json_dumps(
         {
@@ -1352,7 +1725,7 @@ def arcgis_pro_move_layer(
 
 @mcp.tool(
     name="arcgis_pro_rename_layer",
-    description="重命名图层（Layer.name）。若存在同名图层可能产生歧义。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_rename_layer(
     aprx_path: str,
@@ -1381,7 +1754,7 @@ def arcgis_pro_rename_layer(
 
 @mcp.tool(
     name="arcgis_pro_set_map_reference_scale",
-    description="设置地图参考比例尺（0 表示无参考比例尺）。影响符号与注记显示。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_map_reference_scale(
     aprx_path: str,
@@ -1407,7 +1780,7 @@ def arcgis_pro_set_map_reference_scale(
 
 @mcp.tool(
     name="arcgis_pro_set_map_default_camera",
-    description="设置地图默认 Camera 的 scale/heading/pitch/roll（传入的数值才会更新）。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_map_default_camera(
     aprx_path: str,
@@ -1471,10 +1844,7 @@ _JOIN_TYPES = frozenset({"KEEP_ALL", "KEEP_COMMON"})
 
 @mcp.tool(
     name="arcgis_pro_select_layer_by_location",
-    description=(
-        "按位置选择：SelectLayerByLocation，输入与选择图层须在同一地图内。"
-        "overlap_type 已白名单；距离类关系必须提供 search_distance（如 \"500 Meters\"）。需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_select_layer_by_location(
     aprx_path: str,
@@ -1493,13 +1863,13 @@ def arcgis_pro_select_layer_by_location(
     sel_lyr = _find_layer(m, selecting_layer_name)
     ov = overlap_type.strip().upper()
     if ov not in _OVERLAP_LOCATION:
-        raise RuntimeError(f"不支持的 overlap_type，可选示例：{sorted(_OVERLAP_LOCATION)}")
+        raise RuntimeError("Invalid arguments")
     sd = (search_distance or "").strip()
     if ov in _DISTANCE_OVERLAP and not sd:
         raise RuntimeError("当前 overlap_type 必须提供 search_distance")
     st = selection_type.strip().upper()
     if st not in _SELECTION_TYPES:
-        raise RuntimeError(f"非法 selection_type，可选：{sorted(_SELECTION_TYPES)}")
+        raise RuntimeError("Invalid arguments")
     inv = "INVERT" if invert_spatial_relationship else "NOT_INVERT"
     arcpy.management.SelectLayerByLocation(
         input_lyr,
@@ -1524,7 +1894,7 @@ def arcgis_pro_select_layer_by_location(
 
 @mcp.tool(
     name="arcgis_pro_clear_map_selection",
-    description="清除地图上要素图层的选择集（每层执行 CLEAR_SELECTION）。scope=all_layers 或指定 layer_name。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_clear_map_selection(
     aprx_path: str,
@@ -1563,7 +1933,7 @@ def arcgis_pro_clear_map_selection(
 
 @mcp.tool(
     name="arcgis_pro_layer_selection_count",
-    description="返回图层当前选择集要素数（GetCount；有选择集时计数为选中数量）。只读。",
+    description="",
 )
 def arcgis_pro_layer_selection_count(
     aprx_path: str,
@@ -1586,7 +1956,7 @@ def arcgis_pro_layer_selection_count(
 
 @mcp.tool(
     name="arcgis_pro_layer_selection_fids",
-    description="列出当前选择集中的 OID（OID@），最多 max_fids 条。无选择时可能返回空列表。只读。",
+    description="",
 )
 def arcgis_pro_layer_selection_fids(
     aprx_path: str,
@@ -1619,10 +1989,7 @@ def arcgis_pro_layer_selection_fids(
 
 @mcp.tool(
     name="arcgis_pro_gp_buffer",
-    description=(
-        "analysis.Buffer：输出须位于 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT（该变量必须已设置）。"
-        "须 ALLOW_WRITE；输入路径受 INPUT_ROOTS 约束（若设置）。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_buffer(
     in_features: str,
@@ -1642,7 +2009,7 @@ def arcgis_pro_gp_buffer(
 
 @mcp.tool(
     name="arcgis_pro_gp_clip",
-    description="analysis.Clip：输出须在 GP_OUTPUT_ROOT（必填）；须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_clip(
     in_features: str,
@@ -1663,7 +2030,7 @@ def arcgis_pro_gp_clip(
 
 @mcp.tool(
     name="arcgis_pro_gp_analysis_select",
-    description="analysis.Select：按 where_clause 子集输出要素类；输出须在 GP_OUTPUT_ROOT；须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_analysis_select(
     in_features: str,
@@ -1683,7 +2050,7 @@ def arcgis_pro_gp_analysis_select(
 
 @mcp.tool(
     name="arcgis_pro_gp_copy_features",
-    description="management.CopyFeatures：复制到 GP_OUTPUT_ROOT 下；须 ALLOW_WRITE 且配置 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_copy_features(in_features: str, out_feature_class: str) -> str:
     arcpy = _arcpy()
@@ -1699,7 +2066,7 @@ def arcgis_pro_gp_copy_features(in_features: str, out_feature_class: str) -> str
 
 @mcp.tool(
     name="arcgis_pro_add_join",
-    description="management.AddJoin：图层字段连接至表路径。join_type 为 KEEP_ALL 或 KEEP_COMMON。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_add_join(
     aprx_path: str,
@@ -1716,7 +2083,7 @@ def arcgis_pro_add_join(
     lyr = _find_layer(m, layer_name)
     jt = join_type.strip().upper()
     if jt not in _JOIN_TYPES:
-        raise RuntimeError(f"join_type 须为 {sorted(_JOIN_TYPES)}")
+        raise RuntimeError("Invalid arguments")
     jpath = validate_input_path_optional(join_table_path, "join_table_path")
     arcpy.management.AddJoin(lyr, layer_field.strip(), jpath, join_field.strip(), jt)
     return _json_dumps(
@@ -1732,7 +2099,7 @@ def arcgis_pro_add_join(
 
 @mcp.tool(
     name="arcgis_pro_remove_join",
-    description="management.RemoveJoin：join_name 为空则移除该图层全部连接（行为依 Pro 版本而定）。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_remove_join(
     aprx_path: str,
@@ -1775,15 +2142,12 @@ def _find_layout_text_element(layout: Any, element_name: str, element_type: str)
         for elm in layout.listElements(tt):
             if getattr(elm, "name", "") == en:
                 return elm
-    raise RuntimeError(f"未找到布局文本元素 {en!r}，已查：{order}")
+    raise RuntimeError("Invalid arguments")
 
 
 @mcp.tool(
     name="arcgis_pro_update_layout_text_element",
-    description=(
-        "修改布局中文本元素的 .text。element_type 可空（依次查 TEXT_ELEMENT、TEXT_GRAPHIC_ELEMENT）。"
-        "若原文含动态文本片段（<dyn…）且未设 allow_dynamic_text_overwrite=true 则拒绝。需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_update_layout_text_element(
     aprx_path: str,
@@ -1813,11 +2177,7 @@ def arcgis_pro_update_layout_text_element(
 
 @mcp.tool(
     name="arcgis_pro_set_mapframe_extent",
-    description=(
-        "设置布局中地图框的显示范围（MapFrame.setExtent）。"
-        "坐标为 xmin/ymin/xmax/ymax；spatial_reference_wkid 为空则使用当前地图框空间参考。"
-        "需 ALLOW_WRITE；建议随后 save_project。"
-    ),
+    description="",
 )
 def arcgis_pro_set_mapframe_extent(
     aprx_path: str,
@@ -1839,7 +2199,7 @@ def arcgis_pro_set_mapframe_extent(
             break
     if mf is None:
         names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
-        raise RuntimeError(f"未找到地图框 {mapframe_name!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
     ext = arcpy.Extent(float(xmin), float(ymin), float(xmax), float(ymax))  # type: ignore[attr-defined]
     if spatial_reference_wkid is not None:
         ext.spatialReference = arcpy.SpatialReference(int(spatial_reference_wkid))  # type: ignore[attr-defined]
@@ -1872,7 +2232,7 @@ def _symbology_template_path(path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_set_map_spatial_reference",
-    description="设置地图的空间参考（SpatialReference factoryCode / WKID）。需 ALLOW_WRITE；影响整图显示与分析上下文。",
+    description="",
 )
 def arcgis_pro_set_map_spatial_reference(
     aprx_path: str,
@@ -1890,11 +2250,7 @@ def arcgis_pro_set_map_spatial_reference(
 
 @mcp.tool(
     name="arcgis_pro_layer_replace_data_source",
-    description=(
-        "Layer.replaceDataSource：用新的 workspace 与要素类名修复/替换数据源。"
-        "dataset_type 示例：FEATURE_CLASS、SHAPEFILE_WORKSPACE、RASTER_DATASET、TEXT_TABLE。"
-        "需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_layer_replace_data_source(
     aprx_path: str,
@@ -1932,10 +2288,7 @@ def arcgis_pro_layer_replace_data_source(
 
 @mcp.tool(
     name="arcgis_pro_apply_symbology_from_layer",
-    description=(
-        "management.ApplySymbologyFromLayer：从 .lyrx/.lyr 模板应用符号系统到地图图层。"
-        "模板路径受 INPUT_ROOTS 约束（若设置）。需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_apply_symbology_from_layer(
     aprx_path: str,
@@ -1962,7 +2315,7 @@ def arcgis_pro_apply_symbology_from_layer(
 
 @mcp.tool(
     name="arcgis_pro_set_layer_scale_range",
-    description="设置图层可见比例范围 minimumScale / maximumScale（0 通常表示不限制）。至少传入一个比例。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_layer_scale_range(
     aprx_path: str,
@@ -1997,7 +2350,7 @@ def arcgis_pro_set_layer_scale_range(
 
 @mcp.tool(
     name="arcgis_pro_toggle_layer_labels",
-    description="开关图层标注（Layer.showLabels）。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_toggle_layer_labels(
     aprx_path: str,
@@ -2023,7 +2376,7 @@ def arcgis_pro_toggle_layer_labels(
 
 @mcp.tool(
     name="arcgis_pro_gp_dissolve",
-    description="analysis.Dissolve；输出须在 GP_OUTPUT_ROOT；须 ALLOW_WRITE。可选 dissolve_field。",
+    description="",
 )
 def arcgis_pro_gp_dissolve(
     in_features: str,
@@ -2043,7 +2396,7 @@ def arcgis_pro_gp_dissolve(
 
 @mcp.tool(
     name="arcgis_pro_gp_intersect",
-    description="analysis.Intersect，至少 2 个输入路径；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_intersect(
     in_feature_paths: list[str],
@@ -2062,7 +2415,7 @@ def arcgis_pro_gp_intersect(
 
 @mcp.tool(
     name="arcgis_pro_gp_union",
-    description="analysis.Union，至少 2 个输入；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_union(
     in_feature_paths: list[str],
@@ -2081,7 +2434,7 @@ def arcgis_pro_gp_union(
 
 @mcp.tool(
     name="arcgis_pro_gp_erase",
-    description="analysis.Erase；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_erase(
     in_features: str,
@@ -2102,7 +2455,7 @@ def arcgis_pro_gp_erase(
 
 @mcp.tool(
     name="arcgis_pro_gp_spatial_join",
-    description="analysis.SpatialJoin（默认参数）；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_spatial_join(
     target_features: str,
@@ -2123,7 +2476,7 @@ def arcgis_pro_gp_spatial_join(
 
 @mcp.tool(
     name="arcgis_pro_gp_statistics",
-    description="analysis.Statistics（汇总统计）；statistics_fields 如 \"POP SUM;AREA MEAN\"；输出表在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_statistics(
     in_table: str,
@@ -2144,7 +2497,7 @@ def arcgis_pro_gp_statistics(
 
 @mcp.tool(
     name="arcgis_pro_gp_frequency",
-    description="analysis.Frequency；frequency_fields 可用分号分隔多字段；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_frequency(
     in_table: str,
@@ -2165,7 +2518,7 @@ def arcgis_pro_gp_frequency(
 
 @mcp.tool(
     name="arcgis_pro_gp_table_select",
-    description="analysis.TableSelect；可选 where_clause；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_table_select(
     in_table: str,
@@ -2185,7 +2538,7 @@ def arcgis_pro_gp_table_select(
 
 @mcp.tool(
     name="arcgis_pro_gp_merge",
-    description="management.Merge；至少 2 个输入；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_merge(
     in_feature_paths: list[str],
@@ -2204,7 +2557,7 @@ def arcgis_pro_gp_merge(
 
 @mcp.tool(
     name="arcgis_pro_gp_project",
-    description="management.Project：要素类/栅格等投影到 out_wkid；可选 transform_method；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_project(
     in_dataset: str,
@@ -2226,10 +2579,7 @@ def arcgis_pro_gp_project(
 
 @mcp.tool(
     name="arcgis_pro_gp_add_field",
-    description=(
-        "management.AddField：原地修改表/要素类结构。须 ALLOW_WRITE；路径受 INPUT_ROOTS 约束（若设置）。"
-        "field_type 为 TEXT/SHORT/LONG/FLOAT/DOUBLE/DATE；TEXT 默认长度 255。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_add_field(
     in_table: str,
@@ -2251,10 +2601,7 @@ def arcgis_pro_gp_add_field(
 
 @mcp.tool(
     name="arcgis_pro_gp_delete_field",
-    description=(
-        "management.DeleteField：删除字段。drop_field 可为单个名称或多个（逗号/分号分隔）。"
-        "禁止删除 OBJECTID/SHAPE 等系统字段。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_delete_field(in_table: str, drop_field: str) -> str:
     arcpy = _arcpy()
@@ -2266,10 +2613,7 @@ def arcgis_pro_gp_delete_field(in_table: str, drop_field: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_da_update_field_constant",
-    description=(
-        "UpdateCursor：将单字段更新为常量（value_string 按字段类型解析；空字符串写 NULL）。"
-        "max_rows_updated 上限 5000；可选 where_clause。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_da_update_field_constant(
     dataset_path: str,
@@ -2300,7 +2644,7 @@ def arcgis_pro_da_update_field_constant(
 
 @mcp.tool(
     name="arcgis_pro_gp_export_features",
-    description="management.ExportFeatures：导出要素；输出须在 GP_OUTPUT_ROOT。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_export_features(in_features: str, out_path: str) -> str:
     arcpy = _arcpy()
@@ -2316,7 +2660,7 @@ def arcgis_pro_gp_export_features(in_features: str, out_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_export_table",
-    description="management.ExportTable：导出表；输出须在 GP_OUTPUT_ROOT。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_export_table(in_table: str, out_path: str) -> str:
     arcpy = _arcpy()
@@ -2332,10 +2676,7 @@ def arcgis_pro_gp_export_table(in_table: str, out_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_near",
-    description=(
-        "analysis.Near：在输入要素上写入最近邻距离/ID 等字段（原地修改 in_features，不产生新输出）。"
-        "须 ALLOW_WRITE；路径受 INPUT_ROOTS（若设置）。不使用 GP_OUTPUT_ROOT。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_near(in_features: str, near_features: str) -> str:
     arcpy = _arcpy()
@@ -2351,7 +2692,7 @@ def arcgis_pro_gp_near(in_features: str, near_features: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_generate_near_table",
-    description="analysis.GenerateNearTable：输出邻近关系表，路径须在 GP_OUTPUT_ROOT。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_generate_near_table(
     in_features: str,
@@ -2368,3 +2709,2057 @@ def arcgis_pro_gp_generate_near_table(
             "out_table": normalize_path(out_table),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Data Write Tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_da_insert_features",
+    description="",
+)
+def arcgis_pro_da_insert_features(
+    dataset_path: str,
+    fields: list[str],
+    rows: list[list[Any]],
+) -> str:
+    arcpy = _arcpy()
+    n = da_write.insert_features(arcpy, dataset_path, fields, rows)
+    return _json_dumps(
+        {"ok": True, "dataset_path": normalize_path(dataset_path), "rows_inserted": n},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_da_update_features",
+    description="",
+)
+def arcgis_pro_da_update_features(
+    dataset_path: str,
+    field_name: str,
+    updates: dict[str, Any],
+    where_clause: str = "",
+    max_rows_updated: int = 1000,
+) -> str:
+    arcpy = _arcpy()
+    n, truncated = da_write.update_features(
+        arcpy, dataset_path, field_name, updates, where_clause, max_rows_updated
+    )
+    return _json_dumps(
+        {
+            "ok": True,
+            "dataset_path": normalize_path(dataset_path),
+            "rows_updated": n,
+            "truncated": truncated,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_da_delete_selected",
+    description="",
+)
+def arcgis_pro_da_delete_selected(
+    dataset_path: str,
+    where_clause: str,
+    max_rows_deleted: int = 1000,
+) -> str:
+    arcpy = _arcpy()
+    n, truncated = da_write.delete_selected(arcpy, dataset_path, where_clause, max_rows_deleted)
+    return _json_dumps(
+        {
+            "ok": True,
+            "dataset_path": normalize_path(dataset_path),
+            "rows_deleted": n,
+            "truncated": truncated,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_calculate_field",
+    description="",
+)
+def arcgis_pro_gp_calculate_field(
+    in_table: str,
+    field_name: str,
+    expression: str,
+    expression_type: str = "PYTHON3",
+    code_block: str = "",
+) -> str:
+    require_allow_write()
+    arcpy = _arcpy()
+    p = validate_input_path_optional(in_table, "in_table")
+    fn = field_name.strip()
+    if not fn:
+        raise RuntimeError("field_name 不能为空")
+    expr = expression.strip()
+    if not expr:
+        raise RuntimeError("expression 不能为空")
+    et = expression_type.strip().upper()
+    if et not in ("PYTHON3", "ARCADE", "VB", "PYTHON", "PYTHON_9.3"):
+        raise RuntimeError("expression_type 须为 PYTHON3、ARCADE 或 VB")
+    cb = (code_block or "").strip()
+    if cb:
+        arcpy.management.CalculateField(p, fn, expr, et, cb)
+    else:
+        arcpy.management.CalculateField(p, fn, expr, et)
+    return _json_dumps({"ok": True, "in_table": normalize_path(in_table), "field_name": fn})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_calculate_geometry",
+    description="",
+)
+def arcgis_pro_gp_calculate_geometry(
+    in_features: str,
+    geometry_property: list[list[str]],
+    length_unit: str = "",
+    area_unit: str = "",
+) -> str:
+    require_allow_write()
+    arcpy = _arcpy()
+    p = validate_input_path_optional(in_features, "in_features")
+    if not geometry_property:
+        raise RuntimeError("geometry_property 不能为空")
+    lu = (length_unit or "").strip()
+    au = (area_unit or "").strip()
+    kwargs: dict[str, Any] = {}
+    if lu:
+        kwargs["length_unit"] = lu
+    if au:
+        kwargs["area_unit"] = au
+    arcpy.management.CalculateGeometryAttributes(p, geometry_property, **kwargs)
+    return _json_dumps({"ok": True, "in_features": normalize_path(in_features)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_append",
+    description="",
+)
+def arcgis_pro_gp_append(
+    inputs: list[str],
+    target: str,
+    schema_type: str = "TEST",
+) -> str:
+    require_allow_write()
+    arcpy = _arcpy()
+    if not inputs:
+        raise RuntimeError("inputs 不能为空")
+    ins = [validate_input_path_optional(p, f"input_{i}") for i, p in enumerate(inputs)]
+    tgt = validate_input_path_optional(target, "target")
+    st = schema_type.strip().upper()
+    if st not in ("TEST", "NO_TEST"):
+        raise RuntimeError("schema_type 须为 TEST 或 NO_TEST")
+    arcpy.management.Append(ins, tgt, st)
+    return _json_dumps({"ok": True, "target": normalize_path(target), "input_count": len(ins)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_delete_features",
+    description="",
+)
+def arcgis_pro_gp_delete_features(in_features: str) -> str:
+    require_allow_write()
+    arcpy = _arcpy()
+    p = validate_input_path_optional(in_features, "in_features")
+    arcpy.management.DeleteFeatures(p)
+    return _json_dumps({"ok": True, "in_features": normalize_path(in_features)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_truncate_table",
+    description="",
+)
+def arcgis_pro_gp_truncate_table(in_table: str) -> str:
+    require_allow_write()
+    arcpy = _arcpy()
+    p = validate_input_path_optional(in_table, "in_table")
+    arcpy.management.TruncateTable(p)
+    return _json_dumps({"ok": True, "in_table": normalize_path(in_table)})
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Create Data
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_create_feature_class",
+    description="",
+)
+def arcgis_pro_gp_create_feature_class(
+    out_path: str,
+    out_name: str,
+    geometry_type: str,
+    spatial_reference_wkid: int | None = None,
+) -> str:
+    arcpy = _arcpy()
+    result_path = gp_create.run_create_feature_class(
+        arcpy, out_path, out_name, geometry_type, spatial_reference_wkid
+    )
+    return _json_dumps({"ok": True, "created": result_path})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_create_table",
+    description="",
+)
+def arcgis_pro_gp_create_table(out_path: str, out_name: str) -> str:
+    arcpy = _arcpy()
+    result_path = gp_create.run_create_table(arcpy, out_path, out_name)
+    return _json_dumps({"ok": True, "created": result_path})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_create_file_gdb",
+    description="",
+)
+def arcgis_pro_gp_create_file_gdb(out_folder_path: str, out_name: str) -> str:
+    arcpy = _arcpy()
+    result_path = gp_create.run_create_file_gdb(arcpy, out_folder_path, out_name)
+    return _json_dumps({"ok": True, "created": result_path})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_create_feature_dataset",
+    description="",
+)
+def arcgis_pro_gp_create_feature_dataset(
+    out_dataset_path: str,
+    out_name: str,
+    spatial_reference_wkid: int,
+) -> str:
+    arcpy = _arcpy()
+    result_path = gp_create.run_create_feature_dataset(
+        arcpy, out_dataset_path, out_name, spatial_reference_wkid
+    )
+    return _json_dumps({"ok": True, "created": result_path})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_copy_feature_class",
+    description="",
+)
+def arcgis_pro_gp_copy_feature_class(in_features: str, out_feature_class: str) -> str:
+    arcpy = _arcpy()
+    gp_create.run_copy_feature_class(arcpy, in_features, out_feature_class)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_features": normalize_path(in_features),
+            "out_feature_class": normalize_path(out_feature_class),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_rename_dataset",
+    description="",
+)
+def arcgis_pro_gp_rename_dataset(in_data: str, out_data: str) -> str:
+    arcpy = _arcpy()
+    gp_create.run_rename_dataset(arcpy, in_data, out_data)
+    return _json_dumps(
+        {"ok": True, "in_data": normalize_path(in_data), "out_data": out_data.strip()},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_delete_dataset",
+    description="",
+)
+def arcgis_pro_gp_delete_dataset(in_data: str) -> str:
+    arcpy = _arcpy()
+    gp_create.run_delete_dataset(arcpy, in_data)
+    return _json_dumps({"ok": True, "deleted": normalize_path(in_data)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_alter_field",
+    description="",
+)
+def arcgis_pro_gp_alter_field(
+    in_table: str,
+    field_name: str,
+    new_field_name: str = "",
+    new_field_alias: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_create.run_alter_field(arcpy, in_table, field_name, new_field_name, new_field_alias)
+    return _json_dumps(
+        {
+            "ok": True,
+            "in_table": normalize_path(in_table),
+            "field_name": field_name.strip(),
+            "new_field_name": new_field_name.strip() or "(unchanged)",
+            "new_field_alias": new_field_alias.strip() or "(unchanged)",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Import / Export Conversion
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_import_csv_to_table",
+    description="",
+)
+def arcgis_pro_gp_import_csv_to_table(
+    in_rows: str,
+    out_path: str,
+    out_name: str,
+) -> str:
+    arcpy = _arcpy()
+    result_path = gp_convert.run_table_to_table(arcpy, in_rows, out_path, out_name)
+    return _json_dumps({"ok": True, "created": result_path})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_xy_table_to_point",
+    description="",
+)
+def arcgis_pro_gp_xy_table_to_point(
+    in_table: str,
+    out_feature_class: str,
+    x_field: str,
+    y_field: str,
+    spatial_reference_wkid: int = 4326,
+) -> str:
+    arcpy = _arcpy()
+    gp_convert.run_xy_table_to_point(
+        arcpy, in_table, out_feature_class, x_field, y_field, spatial_reference_wkid
+    )
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_json_to_features",
+    description="",
+)
+def arcgis_pro_gp_json_to_features(in_json_file: str, out_features: str) -> str:
+    arcpy = _arcpy()
+    gp_convert.run_json_to_features(arcpy, in_json_file, out_features)
+    return _json_dumps({"ok": True, "out_features": normalize_path(out_features)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_features_to_json",
+    description="",
+)
+def arcgis_pro_gp_features_to_json(
+    in_features: str,
+    out_json_file: str,
+    format_json: bool = True,
+    include_z_values: bool = False,
+    include_m_values: bool = False,
+) -> str:
+    arcpy = _arcpy()
+    gp_convert.run_features_to_json(
+        arcpy, in_features, out_json_file, format_json, include_z_values, include_m_values
+    )
+    return _json_dumps({"ok": True, "out_json_file": normalize_path(out_json_file)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_kml_to_layer",
+    description="",
+)
+def arcgis_pro_gp_kml_to_layer(in_kml_file: str, output_folder: str) -> str:
+    arcpy = _arcpy()
+    gp_convert.run_kml_to_layer(arcpy, in_kml_file, output_folder)
+    return _json_dumps({"ok": True, "output_folder": normalize_path(output_folder)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_excel_to_table",
+    description="",
+)
+def arcgis_pro_gp_excel_to_table(
+    input_excel: str,
+    out_table: str,
+    sheet: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_convert.run_excel_to_table(arcpy, input_excel, out_table, sheet)
+    return _json_dumps({"ok": True, "out_table": normalize_path(out_table)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_table_to_excel",
+    description="",
+)
+def arcgis_pro_gp_table_to_excel(in_table: str, output_excel: str) -> str:
+    arcpy = _arcpy()
+    gp_convert.run_table_to_excel(arcpy, in_table, output_excel)
+    return _json_dumps({"ok": True, "output_excel": normalize_path(output_excel)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_feature_class_to_shapefile",
+    description="",
+)
+def arcgis_pro_gp_feature_class_to_shapefile(
+    input_features: list[str],
+    output_folder: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_convert.run_feature_class_to_shapefile(arcpy, input_features, output_folder)
+    return _json_dumps({"ok": True, "output_folder": normalize_path(output_folder)})
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Core GP Analysis Tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_multiple_ring_buffer",
+    description="",
+)
+def arcgis_pro_gp_multiple_ring_buffer(
+    in_features: str,
+    out_feature_class: str,
+    distances: list[float],
+    buffer_unit: str = "Meters",
+    dissolve_option: str = "ALL",
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_multiple_ring_buffer(
+        arcpy, in_features, out_feature_class, distances, buffer_unit, dissolve_option
+    )
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_feature_to_point",
+    description="",
+)
+def arcgis_pro_gp_feature_to_point(
+    in_features: str,
+    out_feature_class: str,
+    point_location: str = "CENTROID",
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_feature_to_point(arcpy, in_features, out_feature_class, point_location)
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_feature_to_line",
+    description="",
+)
+def arcgis_pro_gp_feature_to_line(in_features: str, out_feature_class: str) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_feature_to_line(arcpy, in_features, out_feature_class)
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_points_to_line",
+    description="",
+)
+def arcgis_pro_gp_points_to_line(
+    in_features: str,
+    out_feature_class: str,
+    line_field: str = "",
+    sort_field: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_points_to_line(
+        arcpy, in_features, out_feature_class, line_field, sort_field
+    )
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_polygon_to_line",
+    description="",
+)
+def arcgis_pro_gp_polygon_to_line(
+    in_features: str,
+    out_feature_class: str,
+    neighbor_option: str = "IDENTIFY_NEIGHBORS",
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_polygon_to_line(arcpy, in_features, out_feature_class, neighbor_option)
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_minimum_bounding_geometry",
+    description="",
+)
+def arcgis_pro_gp_minimum_bounding_geometry(
+    in_features: str,
+    out_feature_class: str,
+    geometry_type: str = "ENVELOPE",
+    group_option: str = "NONE",
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_minimum_bounding_geometry(
+        arcpy, in_features, out_feature_class, geometry_type, group_option
+    )
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_convex_hull",
+    description="",
+)
+def arcgis_pro_gp_convex_hull(
+    in_features: str,
+    out_feature_class: str,
+    group_option: str = "ALL",
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_convex_hull(arcpy, in_features, out_feature_class, group_option)
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_split_by_attributes",
+    description="",
+)
+def arcgis_pro_gp_split_by_attributes(
+    in_table: str,
+    target_workspace: str,
+    split_fields: list[str],
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_split_by_attributes(arcpy, in_table, target_workspace, split_fields)
+    return _json_dumps(
+        {"ok": True, "target_workspace": normalize_path(target_workspace)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_identity",
+    description="",
+)
+def arcgis_pro_gp_identity(
+    in_features: str,
+    identity_features: str,
+    out_feature_class: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_identity(arcpy, in_features, identity_features, out_feature_class)
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_symmetrical_difference",
+    description="",
+)
+def arcgis_pro_gp_symmetrical_difference(
+    in_features: str,
+    update_features: str,
+    out_feature_class: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_symmetrical_difference(
+        arcpy, in_features, update_features, out_feature_class
+    )
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_count_overlapping_features",
+    description="",
+)
+def arcgis_pro_gp_count_overlapping_features(
+    in_features: str,
+    out_feature_class: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_count_overlapping_features(arcpy, in_features, out_feature_class)
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_repair_geometry",
+    description="",
+)
+def arcgis_pro_gp_repair_geometry(in_features: str) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_repair_geometry(arcpy, in_features)
+    return _json_dumps({"ok": True, "in_features": normalize_path(in_features)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_check_geometry",
+    description="",
+)
+def arcgis_pro_gp_check_geometry(in_features: str, out_table: str) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_check_geometry(arcpy, in_features, out_table)
+    return _json_dumps({"ok": True, "out_table": normalize_path(out_table)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_eliminate",
+    description="",
+)
+def arcgis_pro_gp_eliminate(
+    in_features: str,
+    out_feature_class: str,
+    selection_type: str = "LENGTH",
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_eliminate(arcpy, in_features, out_feature_class, selection_type)
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_multipart_to_singlepart",
+    description="",
+)
+def arcgis_pro_gp_multipart_to_singlepart(
+    in_features: str,
+    out_feature_class: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_multipart_to_singlepart(arcpy, in_features, out_feature_class)
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_aggregate_polygons",
+    description="",
+)
+def arcgis_pro_gp_aggregate_polygons(
+    in_features: str,
+    out_feature_class: str,
+    aggregation_distance: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_analysis.run_aggregate_polygons(
+        arcpy, in_features, out_feature_class, aggregation_distance
+    )
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Raster Analysis
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_slope",
+    description="",
+)
+def arcgis_pro_gp_slope(
+    in_raster: str,
+    out_raster: str,
+    output_measurement: str = "DEGREE",
+    z_factor: float = 1.0,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_slope(arcpy, in_raster, out_raster, output_measurement, z_factor)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_aspect",
+    description="",
+)
+def arcgis_pro_gp_aspect(in_raster: str, out_raster: str) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_aspect(arcpy, in_raster, out_raster)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_hillshade",
+    description="",
+)
+def arcgis_pro_gp_hillshade(
+    in_raster: str,
+    out_raster: str,
+    azimuth: float = 315.0,
+    altitude: float = 45.0,
+    z_factor: float = 1.0,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_hillshade(arcpy, in_raster, out_raster, azimuth, altitude, z_factor)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_reclassify",
+    description="",
+)
+def arcgis_pro_gp_reclassify(
+    in_raster: str,
+    reclass_field: str,
+    remap: str,
+    out_raster: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_reclassify(arcpy, in_raster, reclass_field, remap, out_raster)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_extract_by_mask",
+    description="",
+)
+def arcgis_pro_gp_extract_by_mask(
+    in_raster: str,
+    in_mask_data: str,
+    out_raster: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_extract_by_mask(arcpy, in_raster, in_mask_data, out_raster)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_extract_by_attributes",
+    description="",
+)
+def arcgis_pro_gp_extract_by_attributes(
+    in_raster: str,
+    where_clause: str,
+    out_raster: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_extract_by_attributes(arcpy, in_raster, where_clause, out_raster)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_zonal_statistics_as_table",
+    description="",
+)
+def arcgis_pro_gp_zonal_statistics_as_table(
+    in_zone_data: str,
+    zone_field: str,
+    in_value_raster: str,
+    out_table: str,
+    statistics_type: str = "ALL",
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_zonal_statistics_as_table(
+        arcpy, in_zone_data, zone_field, in_value_raster, out_table, statistics_type
+    )
+    return _json_dumps({"ok": True, "out_table": normalize_path(out_table)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_kernel_density",
+    description="",
+)
+def arcgis_pro_gp_kernel_density(
+    in_features: str,
+    population_field: str,
+    out_raster: str,
+    cell_size: float | None = None,
+    search_radius: float | None = None,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_kernel_density(
+        arcpy, in_features, population_field, out_raster, cell_size, search_radius
+    )
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_point_density",
+    description="",
+)
+def arcgis_pro_gp_point_density(
+    in_features: str,
+    population_field: str,
+    out_raster: str,
+    cell_size: float | None = None,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_point_density(arcpy, in_features, population_field, out_raster, cell_size)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_idw",
+    description="",
+)
+def arcgis_pro_gp_idw(
+    in_point_features: str,
+    z_field: str,
+    out_raster: str,
+    cell_size: float | None = None,
+    power: float = 2.0,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_idw(arcpy, in_point_features, z_field, out_raster, cell_size, power)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_kriging",
+    description="",
+)
+def arcgis_pro_gp_kriging(
+    in_point_features: str,
+    z_field: str,
+    out_raster: str,
+    cell_size: float | None = None,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_kriging(arcpy, in_point_features, z_field, out_raster, cell_size)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_topo_to_raster",
+    description="",
+)
+def arcgis_pro_gp_topo_to_raster(
+    in_topo_features: str,
+    out_raster: str,
+    cell_size: float | None = None,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_topo_to_raster(arcpy, in_topo_features, out_raster, cell_size)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_raster_to_polygon",
+    description="",
+)
+def arcgis_pro_gp_raster_to_polygon(
+    in_raster: str,
+    out_polygon_features: str,
+    simplify: bool = True,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_raster_to_polygon(arcpy, in_raster, out_polygon_features, simplify)
+    return _json_dumps(
+        {"ok": True, "out_polygon_features": normalize_path(out_polygon_features)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_polygon_to_raster",
+    description="",
+)
+def arcgis_pro_gp_polygon_to_raster(
+    in_features: str,
+    value_field: str,
+    out_raster: str,
+    cell_size: float | None = None,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_polygon_to_raster(arcpy, in_features, value_field, out_raster, cell_size)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_feature_to_raster",
+    description="",
+)
+def arcgis_pro_gp_feature_to_raster(
+    in_features: str,
+    field: str,
+    out_raster: str,
+    cell_size: float | None = None,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_feature_to_raster(arcpy, in_features, field, out_raster, cell_size)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_raster_calculator",
+    description="",
+)
+def arcgis_pro_gp_raster_calculator(expression: str, out_raster: str) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_raster_calculator(arcpy, expression, out_raster)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_mosaic_to_new_raster",
+    description="",
+)
+def arcgis_pro_gp_mosaic_to_new_raster(
+    input_rasters: list[str],
+    output_location: str,
+    raster_dataset_name: str,
+    number_of_bands: int = 1,
+    pixel_type: str = "32_BIT_FLOAT",
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_mosaic_to_new_raster(
+        arcpy, input_rasters, output_location, raster_dataset_name, number_of_bands, pixel_type
+    )
+    return _json_dumps(
+        {"ok": True, "output": f"{normalize_path(output_location)}\\{raster_dataset_name}"},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_clip_raster",
+    description="",
+)
+def arcgis_pro_gp_clip_raster(
+    in_raster: str,
+    out_raster: str,
+    rectangle: str = "",
+    in_template_dataset: str = "",
+    clipping_geometry: bool = False,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_clip_raster(
+        arcpy, in_raster, out_raster, rectangle, in_template_dataset, clipping_geometry
+    )
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_resample",
+    description="",
+)
+def arcgis_pro_gp_resample(
+    in_raster: str,
+    out_raster: str,
+    cell_size: str,
+    resampling_type: str = "NEAREST",
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_resample(arcpy, in_raster, out_raster, cell_size, resampling_type)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_project_raster",
+    description="",
+)
+def arcgis_pro_gp_project_raster(
+    in_raster: str,
+    out_raster: str,
+    out_wkid: int,
+    resampling_type: str = "NEAREST",
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_project_raster(arcpy, in_raster, out_raster, out_wkid, resampling_type)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_nibble",
+    description="",
+)
+def arcgis_pro_gp_nibble(
+    in_raster: str,
+    in_mask_raster: str,
+    out_raster: str,
+) -> str:
+    arcpy = _arcpy()
+    gp_raster.run_nibble(arcpy, in_raster, in_mask_raster, out_raster)
+    return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: Symbology Control & Layout Enhancement
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_set_unique_value_renderer",
+    description="",
+)
+def arcgis_pro_set_unique_value_renderer(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    fields: list[str],
+) -> str:
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    symbology.set_unique_value_renderer(arcpy, project, m, lyr, fields)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "layer_name": layer_name,
+         "renderer": "UniqueValueRenderer"},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_set_graduated_colors_renderer",
+    description="",
+)
+def arcgis_pro_set_graduated_colors_renderer(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    classification_field: str,
+    num_classes: int = 5,
+    classification_method: str = "NaturalBreaks",
+) -> str:
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    symbology.set_graduated_colors_renderer(
+        arcpy, project, m, lyr, classification_field, num_classes, classification_method
+    )
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "layer_name": layer_name,
+         "renderer": "GraduatedColorsRenderer"},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_set_graduated_symbols_renderer",
+    description="",
+)
+def arcgis_pro_set_graduated_symbols_renderer(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    classification_field: str,
+    num_classes: int = 5,
+) -> str:
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    symbology.set_graduated_symbols_renderer(
+        arcpy, project, m, lyr, classification_field, num_classes
+    )
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "layer_name": layer_name,
+         "renderer": "GraduatedSymbolsRenderer"},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_set_simple_renderer",
+    description="",
+)
+def arcgis_pro_set_simple_renderer(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+) -> str:
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    symbology.set_simple_renderer(arcpy, project, m, lyr)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "layer_name": layer_name,
+         "renderer": "SimpleRenderer"},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_set_heatmap_renderer",
+    description="",
+)
+def arcgis_pro_set_heatmap_renderer(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+) -> str:
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    symbology.set_heatmap_renderer(arcpy, project, m, lyr)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "layer_name": layer_name,
+         "renderer": "HeatMapRenderer"},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_update_label_expression",
+    description="",
+)
+def arcgis_pro_update_label_expression(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    expression: str,
+    label_class_name: str = "",
+    expression_engine: str = "Arcade",
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    symbology.update_label_expression(arcpy, lyr, expression, label_class_name, expression_engine)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "layer_name": layer_name},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_set_label_font",
+    description="",
+)
+def arcgis_pro_set_label_font(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    font_name: str = "",
+    font_size: float | None = None,
+    font_color: str = "",
+    bold: bool | None = None,
+    italic: bool | None = None,
+    label_class_name: str = "",
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    symbology.set_label_font(arcpy, lyr, font_name, font_size, font_color, bold, italic, label_class_name)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "layer_name": layer_name},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_export_report_pdf",
+    description="",
+)
+def arcgis_pro_export_report_pdf(
+    aprx_path: str,
+    report_name: str,
+    output_pdf_path: str,
+) -> str:
+    arcpy, project, path = _open_project(aprx_path)
+    symbology.export_report_pdf(arcpy, project, report_name, output_pdf_path)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "report_name": report_name,
+         "output_pdf_path": normalize_path(output_pdf_path)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_list_layout_map_frames",
+    description="",
+)
+def arcgis_pro_list_layout_map_frames(
+    aprx_path: str,
+    layout_name: str,
+) -> str:
+    _, project, path = _open_project(aprx_path)
+    layout = _get_layout(project, layout_name)
+    frames: list[dict[str, Any]] = []
+    for elm in layout.listElements("MAPFRAME_ELEMENT"):
+        entry: dict[str, Any] = {"name": elm.name}
+        try:
+            entry["map_name"] = elm.map.name
+        except Exception:  # noqa: BLE001
+            pass
+        frames.append(entry)
+    return _json_dumps(
+        {"aprx_path": path, "layout_name": layout_name, "map_frames": frames},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_set_layout_element_position",
+    description="",
+)
+def arcgis_pro_set_layout_element_position(
+    aprx_path: str,
+    layout_name: str,
+    element_name: str,
+    x: float | None = None,
+    y: float | None = None,
+    width: float | None = None,
+    height: float | None = None,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    layout = _get_layout(project, layout_name)
+    en = element_name.strip()
+    elm = None
+    for e in layout.listElements():
+        if getattr(e, "name", "") == en:
+            elm = e
+            break
+    if elm is None:
+        names = [getattr(e, "name", "") for e in layout.listElements()]
+        raise RuntimeError("Invalid arguments")
+    updated: dict[str, float] = {}
+    if x is not None:
+        elm.elementPositionX = float(x)
+        updated["x"] = float(x)
+    if y is not None:
+        elm.elementPositionY = float(y)
+        updated["y"] = float(y)
+    if width is not None:
+        elm.elementWidth = float(width)
+        updated["width"] = float(width)
+    if height is not None:
+        elm.elementHeight = float(height)
+        updated["height"] = float(height)
+    if not updated:
+        raise RuntimeError("至少提供 x/y/width/height 之一")
+    return _json_dumps({"ok": True, "aprx_path": path, "element_name": en, "updated": updated})
+
+
+@mcp.tool(
+    name="arcgis_pro_set_layout_element_visible",
+    description="",
+)
+def arcgis_pro_set_layout_element_visible(
+    aprx_path: str,
+    layout_name: str,
+    element_name: str,
+    visible: bool,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    layout = _get_layout(project, layout_name)
+    en = element_name.strip()
+    elm = None
+    for e in layout.listElements():
+        if getattr(e, "name", "") == en:
+            elm = e
+            break
+    if elm is None:
+        names = [getattr(e, "name", "") for e in layout.listElements()]
+        raise RuntimeError("Invalid arguments")
+    elm.visible = bool(visible)
+    return _json_dumps({"ok": True, "aprx_path": path, "element_name": en, "visible": bool(visible)})
+
+
+@mcp.tool(
+    name="arcgis_pro_update_legend_items",
+    description="",
+)
+def arcgis_pro_update_legend_items(
+    aprx_path: str,
+    layout_name: str,
+    legend_name: str,
+    layer_visibility: dict[str, bool],
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    layout = _get_layout(project, layout_name)
+    legend = None
+    for elm in layout.listElements("LEGEND_ELEMENT"):
+        if elm.name == legend_name:
+            legend = elm
+            break
+    if legend is None:
+        names = [e.name for e in layout.listElements("LEGEND_ELEMENT")]
+        raise RuntimeError("Invalid arguments")
+    items = legend.items
+    updated_count = 0
+    for item in items:
+        ln = getattr(item, "name", "")
+        if ln in layer_visibility:
+            try:
+                item.visible = bool(layer_visibility[ln])
+                updated_count += 1
+            except Exception:  # noqa: BLE001
+                pass
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "legend_name": legend_name, "items_updated": updated_count},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_create_layout",
+    description="",
+)
+def arcgis_pro_create_layout(
+    aprx_path: str,
+    layout_name: str,
+    page_width: float = 11.0,
+    page_height: float = 8.5,
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    ln = layout_name.strip()
+    if not ln:
+        raise RuntimeError("layout_name 不能为空")
+    w = max(1.0, min(float(page_width), 200.0))
+    h = max(1.0, min(float(page_height), 200.0))
+    lyt = project.createLayout(w, h, "INCH")
+    lyt.name = ln
+    return _json_dumps({"ok": True, "aprx_path": path, "layout_name": ln})
+
+
+@mcp.tool(
+    name="arcgis_pro_rename_layout",
+    description="",
+)
+def arcgis_pro_rename_layout(
+    aprx_path: str,
+    layout_name: str,
+    new_layout_name: str,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    layout = _get_layout(project, layout_name)
+    new_name = new_layout_name.strip()
+    if not new_name:
+        raise RuntimeError("new_layout_name cannot be empty")
+    layout.name = new_name
+    return _json_dumps({"ok": True, "aprx_path": path, "layout_name": layout_name, "new_layout_name": new_name})
+
+
+@mcp.tool(
+    name="arcgis_pro_export_map_to_image",
+    description="",
+)
+def arcgis_pro_export_map_to_image(
+    aprx_path: str,
+    map_name: str,
+    output_path: str,
+    width: int = 1920,
+    height: int = 1080,
+    resolution_dpi: int = 96,
+) -> str:
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    symbology.export_map_to_image(arcpy, m, output_path, width, height, resolution_dpi)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name,
+         "output_path": normalize_path(output_path)},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7: Layer Advanced Operations
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_get_layer_extent",
+    description="",
+)
+def arcgis_pro_get_layer_extent(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+) -> str:
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    desc = arcpy.Describe(lyr)
+    ext = _extent_dict(desc.extent)
+    return _json_dumps(
+        {"aprx_path": path, "map_name": map_name, "layer_name": layer_name, "extent": ext},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_zoom_to_layer",
+    description="",
+)
+def arcgis_pro_zoom_to_layer(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    layout_name: str,
+    mapframe_name: str,
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    layout = _get_layout(project, layout_name)
+    mf = None
+    for elm in layout.listElements("MAPFRAME_ELEMENT"):
+        if elm.name == mapframe_name:
+            mf = elm
+            break
+    if mf is None:
+        raise RuntimeError("Invalid arguments")
+    desc = arcpy.Describe(lyr)
+    ext = desc.extent
+    mf.setExtent(ext)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "layer_name": layer_name, "mapframe_name": mapframe_name},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_zoom_to_selection",
+    description="",
+)
+def arcgis_pro_zoom_to_selection(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    layout_name: str,
+    mapframe_name: str,
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    layout = _get_layout(project, layout_name)
+    mf = None
+    for elm in layout.listElements("MAPFRAME_ELEMENT"):
+        if elm.name == mapframe_name:
+            mf = elm
+            break
+    if mf is None:
+        raise RuntimeError("Invalid arguments")
+    mf.zoomToAllLayers(True)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "layer_name": layer_name, "mapframe_name": mapframe_name},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_layer_add_field_alias",
+    description="",
+)
+def arcgis_pro_layer_add_field_alias(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    field_name: str,
+    field_alias: str,
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    ds = lyr.dataSource
+    fn = field_name.strip()
+    fa = field_alias.strip()
+    if not fn or not fa:
+        raise RuntimeError("field_name 和 field_alias 不能为空")
+    arcpy.management.AlterField(ds, fn, new_field_alias=fa)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "layer_name": layer_name,
+         "field_name": fn, "field_alias": fa},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_update_layer_cim",
+    description="",
+)
+def arcgis_pro_update_layer_cim(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    cim_path: str,
+    value: str,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    cp = cim_path.strip()
+    if not cp:
+        raise RuntimeError("cim_path 不能为空")
+    import json as _json
+    try:
+        val = _json.loads(value)
+    except Exception:
+        val = value
+    cim_def = lyr.getDefinition("V3")
+    parts = cp.split(".")
+    obj = cim_def
+    for part in parts[:-1]:
+        obj = getattr(obj, part)
+    setattr(obj, parts[-1], val)
+    lyr.setDefinition(cim_def)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "layer_name": layer_name, "cim_path": cp},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_list_layer_renderers",
+    description="",
+)
+def arcgis_pro_list_layer_renderers(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+) -> str:
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    info: dict[str, Any] = {"layer_name": layer_name}
+    try:
+        sym = lyr.symbology
+        info["renderer_type"] = getattr(sym.renderer, "type", str(type(sym.renderer).__name__))
+        try:
+            info["fields"] = sym.renderer.fields
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            info["classification_field"] = sym.renderer.classificationField
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            info["break_count"] = sym.renderer.breakCount
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as ex:  # noqa: BLE001
+        info["error"] = str(ex)[:500]
+    return _json_dumps(info)
+
+
+# ---------------------------------------------------------------------------
+# Phase 8: Database Connection Operations
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_list_broken_sources",
+    description="",
+)
+def arcgis_pro_list_broken_sources(aprx_path: str) -> str:
+    _, project, path = _open_project(aprx_path)
+    broken: list[dict[str, Any]] = []
+    try:
+        for lyr in project.listBrokenDataSources():
+            item: dict[str, Any] = {"name": getattr(lyr, "name", str(lyr))}
+            try:
+                item["long_name"] = lyr.longName
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                item["data_source"] = lyr.dataSource
+            except Exception as ex:  # noqa: BLE001
+                item["data_source_error"] = str(ex)[:300]
+            broken.append(item)
+    except Exception as ex:  # noqa: BLE001
+        return _json_dumps({"aprx_path": path, "error": str(ex)[:500]})
+    return _json_dumps({"aprx_path": path, "broken_count": len(broken), "broken_sources": broken})
+
+
+@mcp.tool(
+    name="arcgis_pro_repair_layer_source",
+    description="",
+)
+def arcgis_pro_repair_layer_source(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    new_workspace_path: str,
+    new_dataset_name: str = "",
+    workspace_type: str = "FILEGDB_WORKSPACE",
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    nwp = validate_input_path_optional(new_workspace_path, "new_workspace_path")
+    ndn = new_dataset_name.strip()
+    wt = workspace_type.strip()
+    if ndn:
+        lyr.replaceDataSource(nwp, wt, ndn, True)
+    else:
+        lyr.replaceDataSource(nwp, wt, lyr.name, True)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "layer_name": layer_name,
+         "new_workspace_path": nwp},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_create_db_connection",
+    description="",
+)
+def arcgis_pro_create_db_connection(
+    out_folder_path: str,
+    out_name: str,
+    database_platform: str,
+    instance: str,
+    database: str = "",
+    authentication: str = "DATABASE_AUTH",
+    username: str = "",
+    password: str = "",
+) -> str:
+    require_allow_write()
+    arcpy = _arcpy()
+    from arcgis_pro_mcp.paths import require_gp_output_root_mandatory, validate_gp_output_path
+    require_gp_output_root_mandatory()
+    ofp = validate_gp_output_path(out_folder_path, "out_folder_path")
+    on = out_name.strip()
+    if not on:
+        raise RuntimeError("out_name 不能为空")
+    if not on.lower().endswith(".sde"):
+        on += ".sde"
+    kwargs: dict[str, str] = {
+        "database_platform": database_platform.strip(),
+        "instance": instance.strip(),
+    }
+    if database:
+        kwargs["database"] = database.strip()
+    auth = authentication.strip().upper()
+    kwargs["account_authentication"] = auth
+    if auth == "DATABASE_AUTH":
+        kwargs["username"] = username
+        kwargs["password"] = password
+    arcpy.management.CreateDatabaseConnection(ofp, on, **kwargs)
+    return _json_dumps({"ok": True, "connection_file": f"{ofp}\\{on}"})
+
+
+@mcp.tool(
+    name="arcgis_pro_list_sde_datasets",
+    description="",
+)
+def arcgis_pro_list_sde_datasets(
+    sde_connection_path: str,
+    wild_card: str = "*",
+    max_items: int = 200,
+) -> str:
+    arcpy = _arcpy()
+    p = validate_input_path_optional(sde_connection_path, "sde_connection_path")
+    fcs = workspace_listing.list_feature_classes(arcpy, p, "", "", wild_card, max_items)
+    tables = workspace_listing.list_tables(arcpy, p, wild_card, max_items)
+    return _json_dumps(
+        {"sde_connection_path": p, "feature_classes": fcs, "tables": tables},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 9: Map Operations Enhancement
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_add_basemap",
+    description="",
+)
+def arcgis_pro_add_basemap(
+    aprx_path: str,
+    map_name: str,
+    basemap_name: str,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    bn = basemap_name.strip()
+    if not bn:
+        raise RuntimeError("basemap_name 不能为空")
+    m.addBasemap(bn)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "basemap_name": bn},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_create_map",
+    description="",
+)
+def arcgis_pro_create_map(
+    aprx_path: str,
+    map_name: str,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    mn = map_name.strip()
+    if not mn:
+        raise RuntimeError("map_name 不能为空")
+    new_map = project.createMap(mn)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": getattr(new_map, "name", mn)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_remove_map",
+    description="",
+)
+def arcgis_pro_remove_map(aprx_path: str, map_name: str) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    project.removeItem(m)
+    return _json_dumps({"ok": True, "aprx_path": path, "removed": map_name})
+
+
+@mcp.tool(
+    name="arcgis_pro_duplicate_map",
+    description="",
+)
+def arcgis_pro_duplicate_map(
+    aprx_path: str,
+    map_name: str,
+    new_map_name: str = "",
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    new_map = project.copyItem(m)
+    nmn = new_map_name.strip()
+    if nmn:
+        new_map.name = nmn
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "source_map": map_name,
+         "new_map": getattr(new_map, "name", "")},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_rename_map",
+    description="",
+)
+def arcgis_pro_rename_map(
+    aprx_path: str,
+    map_name: str,
+    new_map_name: str,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    map_obj = _get_map(project, map_name)
+    new_name = new_map_name.strip()
+    if not new_name:
+        raise RuntimeError("new_map_name cannot be empty")
+    map_obj.name = new_name
+    return _json_dumps({"ok": True, "aprx_path": path, "map_name": map_name, "new_map_name": new_name})
+
+
+@mcp.tool(
+    name="arcgis_pro_map_pan_to_extent",
+    description="",
+)
+def arcgis_pro_map_pan_to_extent(
+    aprx_path: str,
+    layout_name: str,
+    mapframe_name: str,
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    spatial_reference_wkid: int | None = None,
+) -> str:
+    require_allow_write()
+    arcpy, project, path = _open_project(aprx_path)
+    layout = _get_layout(project, layout_name)
+    mf = None
+    for elm in layout.listElements("MAPFRAME_ELEMENT"):
+        if elm.name == mapframe_name:
+            mf = elm
+            break
+    if mf is None:
+        raise RuntimeError("Invalid arguments")
+    ext = arcpy.Extent(float(xmin), float(ymin), float(xmax), float(ymax))
+    if spatial_reference_wkid is not None:
+        ext.spatialReference = arcpy.SpatialReference(int(spatial_reference_wkid))
+    else:
+        try:
+            ext.spatialReference = mf.map.spatialReference
+        except Exception:  # noqa: BLE001
+            pass
+    mf.panToExtent(ext)
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "mapframe_name": mapframe_name},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_set_time_slider",
+    description="",
+)
+def arcgis_pro_set_time_slider(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    start_time: str = "",
+    end_time: str = "",
+    time_field: str = "",
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    updated: dict[str, str] = {}
+    try:
+        if time_field:
+            lyr.time.isTimeEnabled = True
+            lyr.time.startTimeField = time_field
+            updated["time_field"] = time_field
+        if start_time:
+            lyr.time.startTime = start_time
+            updated["start_time"] = start_time
+        if end_time:
+            lyr.time.endTime = end_time
+            updated["end_time"] = end_time
+    except Exception as ex:  # noqa: BLE001
+        return _json_dumps({"ok": False, "error": str(ex)[:500]})
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "layer_name": layer_name, "updated": updated},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 10: Generic GP Engine
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_run_tool",
+    description="",
+)
+def arcgis_pro_gp_run_tool(
+    tool_name: str,
+    parameters: dict[str, Any] | None = None,
+) -> str:
+    arcpy = _arcpy()
+    msgs = gp_generic.run_tool(arcpy, tool_name, parameters)
+    return _json_dumps({"ok": True, "tool_name": tool_name, "messages": msgs})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_get_messages",
+    description="",
+)
+def arcgis_pro_gp_get_messages() -> str:
+    arcpy = _arcpy()
+    msgs = gp_generic.get_messages(arcpy)
+    return _json_dumps({"messages": msgs})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_list_toolboxes",
+    description="",
+)
+def arcgis_pro_gp_list_toolboxes() -> str:
+    arcpy = _arcpy()
+    toolboxes = gp_generic.list_toolboxes(arcpy)
+    return _json_dumps({"toolboxes": toolboxes, "count": len(toolboxes)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_list_tools_in_toolbox",
+    description="",
+)
+def arcgis_pro_gp_list_tools_in_toolbox(toolbox: str) -> str:
+    arcpy = _arcpy()
+    tools = gp_generic.list_tools_in_toolbox(arcpy, toolbox)
+    return _json_dumps({"toolbox": toolbox, "tools": tools, "count": len(tools)})
+
+
+# ---------------------------------------------------------------------------
+# Phase 11: Network Analysis
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_na_create_route_layer",
+    description="",
+)
+def arcgis_pro_na_create_route_layer(
+    network_data_source: str,
+    layer_name: str = "Route",
+    travel_mode: str = "",
+) -> str:
+    arcpy = _arcpy()
+    result = gp_network.run_make_route_analysis_layer(
+        arcpy, network_data_source, layer_name, travel_mode
+    )
+    return _json_dumps({"ok": True, "layer": result})
+
+
+@mcp.tool(
+    name="arcgis_pro_na_add_locations",
+    description="",
+)
+def arcgis_pro_na_add_locations(
+    in_network_analysis_layer: str,
+    sub_layer: str,
+    in_table: str,
+    field_mappings: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_network.run_add_locations(
+        arcpy, in_network_analysis_layer, sub_layer, in_table, field_mappings
+    )
+    return _json_dumps({"ok": True, "sub_layer": sub_layer})
+
+
+@mcp.tool(
+    name="arcgis_pro_na_solve",
+    description="",
+)
+def arcgis_pro_na_solve(
+    in_network_analysis_layer: str,
+    ignore_invalids: bool = True,
+) -> str:
+    arcpy = _arcpy()
+    result = gp_network.run_solve(arcpy, in_network_analysis_layer, ignore_invalids)
+    return _json_dumps({"ok": True, "result": result})
+
+
+@mcp.tool(
+    name="arcgis_pro_na_service_area",
+    description="",
+)
+def arcgis_pro_na_service_area(
+    network_data_source: str,
+    layer_name: str = "ServiceArea",
+    travel_mode: str = "",
+    cutoffs: list[float] | None = None,
+) -> str:
+    arcpy = _arcpy()
+    result = gp_network.run_make_service_area_analysis_layer(
+        arcpy, network_data_source, layer_name, travel_mode, cutoffs
+    )
+    return _json_dumps({"ok": True, "layer": result})
+
+
+@mcp.tool(
+    name="arcgis_pro_na_od_matrix",
+    description="",
+)
+def arcgis_pro_na_od_matrix(
+    network_data_source: str,
+    layer_name: str = "ODMatrix",
+    travel_mode: str = "",
+    cutoff: float | None = None,
+    number_of_destinations_to_find: int | None = None,
+) -> str:
+    arcpy = _arcpy()
+    result = gp_network.run_make_od_cost_matrix_layer(
+        arcpy, network_data_source, layer_name, travel_mode, cutoff, number_of_destinations_to_find
+    )
+    return _json_dumps({"ok": True, "layer": result})
+
+
+# ---------------------------------------------------------------------------
+# Phase 12: Metadata & Data Quality
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_get_metadata",
+    description="",
+)
+def arcgis_pro_get_metadata(dataset_path: str) -> str:
+    arcpy = _arcpy()
+    md = metadata.get_metadata(arcpy, dataset_path)
+    return _json_dumps({"dataset_path": normalize_path(dataset_path), "metadata": md})
+
+
+@mcp.tool(
+    name="arcgis_pro_set_metadata",
+    description="",
+)
+def arcgis_pro_set_metadata(
+    dataset_path: str,
+    title: str = "",
+    tags: str = "",
+    summary: str = "",
+    description: str = "",
+    credits: str = "",
+    access_constraints: str = "",
+) -> str:
+    arcpy = _arcpy()
+    metadata.set_metadata(arcpy, dataset_path, title, tags, summary, description, credits, access_constraints)
+    return _json_dumps({"ok": True, "dataset_path": normalize_path(dataset_path)})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_validate_topology",
+    description="",
+)
+def arcgis_pro_gp_validate_topology(in_topology: str) -> str:
+    arcpy = _arcpy()
+    metadata.validate_topology(arcpy, in_topology)
+    return _json_dumps({"ok": True, "in_topology": normalize_path(in_topology)})
+
+
+@mcp.tool(
+    name="arcgis_pro_workspace_list_datasets",
+    description="",
+)
+def arcgis_pro_workspace_list_datasets(
+    workspace_path: str,
+    dataset_type: str = "",
+    wild_card: str = "*",
+    max_items: int = 200,
+) -> str:
+    arcpy = _arcpy()
+    ws = validate_input_path_optional(workspace_path, "workspace_path")
+    names = _list_workspace_datasets(arcpy, ws, dataset_type, wild_card, max_items)
+    return _json_dumps(
+        {
+            "workspace_path": ws,
+            "dataset_type": dataset_type.strip(),
+            "datasets": names,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_workspace_list_feature_datasets",
+    description="",
+)
+def arcgis_pro_workspace_list_feature_datasets(
+    workspace_path: str,
+    wild_card: str = "*",
+    max_items: int = 200,
+) -> str:
+    arcpy = _arcpy()
+    ws = validate_input_path_optional(workspace_path, "workspace_path")
+    names = _list_workspace_datasets(arcpy, ws, "Feature", wild_card, max_items)
+    return _json_dumps({"workspace_path": ws, "feature_datasets": names})
+
+
+@mcp.tool(
+    name="arcgis_pro_workspace_list_domains",
+    description="",
+)
+def arcgis_pro_workspace_list_domains(
+    workspace_path: str,
+    max_items: int = 200,
+) -> str:
+    arcpy = _arcpy()
+    ws = validate_input_path_optional(workspace_path, "workspace_path")
+    domains = _list_workspace_domains(arcpy, ws, max_items)
+    return _json_dumps({"workspace_path": ws, "domains": domains})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_table_to_table",
+    description="",
+)
+def arcgis_pro_gp_table_to_table(
+    in_rows: str,
+    out_path: str,
+    out_name: str,
+) -> str:
+    arcpy = _arcpy()
+    result_path = gp_convert.run_table_to_table(arcpy, in_rows, out_path, out_name)
+    return _json_dumps({"ok": True, "created": result_path})
