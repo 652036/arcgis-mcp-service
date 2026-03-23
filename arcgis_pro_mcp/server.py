@@ -8,7 +8,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from arcgis_pro_mcp import gp_allowlist
+from arcgis_pro_mcp import da_read, gp_allowlist, workspace_listing
 from arcgis_pro_mcp.paths import (
     require_allow_write,
     validate_input_path_optional,
@@ -211,7 +211,14 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_mapframe_extent",
         "arcgis_pro_gp_get_count",
         "arcgis_pro_gp_get_raster_property",
+        "arcgis_pro_gp_get_cell_value",
+        "arcgis_pro_gp_test_schema_lock",
         "arcgis_pro_gp_list_registered",
+        "arcgis_pro_workspace_list_feature_classes",
+        "arcgis_pro_workspace_list_rasters",
+        "arcgis_pro_workspace_list_tables",
+        "arcgis_pro_da_table_sample",
+        "arcgis_pro_da_distinct_values",
     ]
     tools_write = [
         "arcgis_pro_save_project",
@@ -223,6 +230,11 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_mapframe_zoom_to_bookmark",
         "arcgis_pro_add_layer_from_path",
         "arcgis_pro_remove_layer",
+        "arcgis_pro_create_group_layer",
+        "arcgis_pro_move_layer",
+        "arcgis_pro_rename_layer",
+        "arcgis_pro_set_map_reference_scale",
+        "arcgis_pro_set_map_default_camera",
     ]
     tools_export = [
         "arcgis_pro_export_layout_pdf",
@@ -244,7 +256,10 @@ def arcgis_pro_server_capabilities() -> str:
             "tools_read_only": tools_read,
             "tools_require_allow_write": tools_write,
             "tools_export": tools_export,
-            "note": "无法通过 MCP 驱动 Pro 的每一个菜单/窗格；未列出的能力可能需手动或使用其他自动化。",
+            "note": (
+                "无法通过 MCP 覆盖 Esri 全功能清单中的每一项；本服务仅封装部分 arcpy/arcpy.da/arcpy.mp 能力，"
+                "发布/共享、深度学习、完整编辑会话等需专用方案或未实现。"
+            ),
         },
     )
 
@@ -1114,4 +1129,279 @@ def arcgis_pro_gp_get_raster_property(
     val = gp_allowlist.gp_get_raster_property(arcpy, p, property_type)
     return _json_dumps(
         {"raster_path": p, "property_type": property_type.strip().upper(), "value": val},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_get_cell_value",
+    description="白名单 GP：GetCellValue。location_xy 为两个数字（空格或逗号分隔），与栅格空间参考一致。",
+)
+def arcgis_pro_gp_get_cell_value(
+    raster_path: str,
+    location_xy: str,
+    band_index: int | None = None,
+) -> str:
+    arcpy = _arcpy()
+    p = validate_input_path_optional(raster_path, "raster_path")
+    val = gp_allowlist.gp_get_cell_value(arcpy, p, location_xy, band_index)
+    return _json_dumps(
+        {"raster_path": p, "location_xy": location_xy.strip(), "value": val},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_test_schema_lock",
+    description="白名单 GP：TestSchemaLock，返回数据集是否可编辑（方案锁）。",
+)
+def arcgis_pro_gp_test_schema_lock(dataset_path: str) -> str:
+    arcpy = _arcpy()
+    p = validate_input_path_optional(dataset_path, "dataset_path")
+    val = gp_allowlist.gp_test_schema_lock(arcpy, p)
+    return _json_dumps({"dataset_path": p, "schema_lock": val})
+
+
+@mcp.tool(
+    name="arcgis_pro_workspace_list_feature_classes",
+    description="在工作空间中列出要素类（ListFeatureClasses）。路径受 INPUT_ROOTS 约束（若设置）。",
+)
+def arcgis_pro_workspace_list_feature_classes(
+    workspace_path: str,
+    feature_dataset: str = "",
+    feature_type: str = "",
+    wild_card: str = "*",
+    max_items: int = 200,
+) -> str:
+    arcpy = _arcpy()
+    ws = validate_input_path_optional(workspace_path, "workspace_path")
+    names = workspace_listing.list_feature_classes(
+        arcpy, ws, feature_dataset, feature_type, wild_card, max_items
+    )
+    return _json_dumps({"workspace_path": ws, "feature_classes": names})
+
+
+@mcp.tool(
+    name="arcgis_pro_workspace_list_rasters",
+    description="在工作空间中列出栅格（ListRasters）。",
+)
+def arcgis_pro_workspace_list_rasters(
+    workspace_path: str,
+    wild_card: str = "*",
+    max_items: int = 200,
+) -> str:
+    arcpy = _arcpy()
+    ws = validate_input_path_optional(workspace_path, "workspace_path")
+    names = workspace_listing.list_rasters(arcpy, ws, wild_card, max_items)
+    return _json_dumps({"workspace_path": ws, "rasters": names})
+
+
+@mcp.tool(
+    name="arcgis_pro_workspace_list_tables",
+    description="在工作空间中列出表（ListTables）。",
+)
+def arcgis_pro_workspace_list_tables(
+    workspace_path: str,
+    wild_card: str = "*",
+    max_items: int = 200,
+) -> str:
+    arcpy = _arcpy()
+    ws = validate_input_path_optional(workspace_path, "workspace_path")
+    names = workspace_listing.list_tables(arcpy, ws, wild_card, max_items)
+    return _json_dumps({"workspace_path": ws, "tables": names})
+
+
+@mcp.tool(
+    name="arcgis_pro_da_table_sample",
+    description=(
+        "只读 SearchCursor：按字段白名单返回最多 max_rows 行；禁止 *；可选 where_clause；"
+        "include_shape_wkt 时附加 SHAPE@WKT（可能很大，注意 max_rows）。"
+    ),
+)
+def arcgis_pro_da_table_sample(
+    dataset_path: str,
+    fields: list[str],
+    where_clause: str = "",
+    max_rows: int = 50,
+    include_shape_wkt: bool = False,
+) -> str:
+    arcpy = _arcpy()
+    p = validate_input_path_optional(dataset_path, "dataset_path")
+    rows = da_read.table_sample(
+        arcpy, p, fields, where_clause, max_rows, include_shape_wkt
+    )
+    return _json_dumps({"dataset_path": p, "row_count": len(rows), "rows": rows})
+
+
+@mcp.tool(
+    name="arcgis_pro_da_distinct_values",
+    description="只读：对单字段扫描（有上限）收集不重复值，用于快速了解域值分布。",
+)
+def arcgis_pro_da_distinct_values(
+    dataset_path: str,
+    field_name: str,
+    where_clause: str = "",
+    max_values: int = 100,
+    max_rows_scanned: int = 50000,
+) -> str:
+    arcpy = _arcpy()
+    p = validate_input_path_optional(dataset_path, "dataset_path")
+    vals = da_read.distinct_values(
+        arcpy, p, field_name, where_clause, max_values, max_rows_scanned
+    )
+    return _json_dumps(
+        {
+            "dataset_path": p,
+            "field_name": field_name.strip(),
+            "value_count": len(vals),
+            "values": vals,
+        },
+    )
+
+
+_PLACE_LAYER = frozenset({"BEFORE", "AFTER"})
+
+
+@mcp.tool(
+    name="arcgis_pro_create_group_layer",
+    description="在地图上创建空组图层（createGroupLayer）。需 ALLOW_WRITE；建议随后 save_project。",
+)
+def arcgis_pro_create_group_layer(aprx_path: str, map_name: str, group_layer_name: str) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    gn = group_layer_name.strip()
+    if not gn:
+        raise RuntimeError("group_layer_name 不能为空")
+    group = m.createGroupLayer(gn)  # type: ignore[attr-defined]
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "map_name": map_name,
+            "group_layer_name": getattr(group, "name", gn),
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_move_layer",
+    description="相对参考图层移动图层顺序（moveLayer），placement 为 BEFORE 或 AFTER。需 ALLOW_WRITE。",
+)
+def arcgis_pro_move_layer(
+    aprx_path: str,
+    map_name: str,
+    reference_layer_name: str,
+    layer_to_move_name: str,
+    placement: str,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    ref = _find_layer(m, reference_layer_name)
+    mov = _find_layer(m, layer_to_move_name)
+    pl = placement.strip().upper()
+    if pl not in _PLACE_LAYER:
+        raise RuntimeError(f"placement 须为 {sorted(_PLACE_LAYER)}")
+    m.moveLayer(ref, mov, pl)  # type: ignore[attr-defined]
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "map_name": map_name,
+            "reference_layer_name": reference_layer_name,
+            "layer_to_move_name": layer_to_move_name,
+            "placement": pl,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_rename_layer",
+    description="重命名图层（Layer.name）。若存在同名图层可能产生歧义。需 ALLOW_WRITE。",
+)
+def arcgis_pro_rename_layer(
+    aprx_path: str,
+    map_name: str,
+    layer_name: str,
+    new_name: str,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    lyr = _find_layer(m, layer_name)
+    nn = new_name.strip()
+    if not nn:
+        raise RuntimeError("new_name 不能为空")
+    lyr.name = nn
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "map_name": map_name,
+            "layer_name": layer_name,
+            "new_name": nn,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_set_map_reference_scale",
+    description="设置地图参考比例尺（0 表示无参考比例尺）。影响符号与注记显示。需 ALLOW_WRITE。",
+)
+def arcgis_pro_set_map_reference_scale(
+    aprx_path: str,
+    map_name: str,
+    reference_scale: float,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    rs = float(reference_scale)
+    if rs < 0:
+        raise RuntimeError("reference_scale 不能为负")
+    m.referenceScale = rs  # type: ignore[attr-defined]
+    return _json_dumps(
+        {
+            "ok": True,
+            "aprx_path": path,
+            "map_name": map_name,
+            "reference_scale": rs,
+        },
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_set_map_default_camera",
+    description="设置地图默认 Camera 的 scale/heading/pitch/roll（传入的数值才会更新）。需 ALLOW_WRITE。",
+)
+def arcgis_pro_set_map_default_camera(
+    aprx_path: str,
+    map_name: str,
+    scale: float | None = None,
+    heading: float | None = None,
+    pitch: float | None = None,
+    roll: float | None = None,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    m = _get_map(project, map_name)
+    cam = m.defaultCamera
+    if cam is None:
+        raise RuntimeError("地图无 defaultCamera")
+    updated: dict[str, float] = {}
+    if scale is not None:
+        cam.scale = float(scale)
+        updated["scale"] = float(scale)
+    if heading is not None:
+        cam.heading = float(heading)
+        updated["heading"] = float(heading)
+    if pitch is not None:
+        cam.pitch = float(pitch)
+        updated["pitch"] = float(pitch)
+    if roll is not None:
+        cam.roll = float(roll)
+        updated["roll"] = float(roll)
+    if not updated:
+        raise RuntimeError("至少提供一个 scale/heading/pitch/roll")
+    return _json_dumps(
+        {"ok": True, "aprx_path": path, "map_name": map_name, "updated": updated},
     )
