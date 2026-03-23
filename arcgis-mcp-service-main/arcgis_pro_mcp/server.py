@@ -76,7 +76,7 @@ def _get_map(project: Any, map_name: str) -> Any:
         if m.name == map_name:
             return m
     available = [m.name for m in project.listMaps()]
-    raise RuntimeError(f"未找到地图 {map_name!r}，可选：{available}")
+    raise RuntimeError("Invalid arguments")
 
 
 def _get_layout(project: Any, layout_name: str) -> Any:
@@ -84,7 +84,7 @@ def _get_layout(project: Any, layout_name: str) -> Any:
         if lyt.name == layout_name:
             return lyt
     available = [lyt.name for lyt in project.listLayouts()]
-    raise RuntimeError(f"未找到布局 {layout_name!r}，可选：{available}")
+    raise RuntimeError("Invalid arguments")
 
 
 def _find_layer(map_obj: Any, layer_name: str) -> Any:
@@ -92,7 +92,7 @@ def _find_layer(map_obj: Any, layer_name: str) -> Any:
         if lyr.name == layer_name:
             return lyr
     names = [x.name for x in map_obj.listLayers()]
-    raise RuntimeError(f"未找到图层 {layer_name!r}，可选：{names}")
+    raise RuntimeError("Invalid arguments")
 
 
 @contextmanager
@@ -178,6 +178,16 @@ def _sanitize_order_by(order_by: str) -> str:
         raise RuntimeError("order_by 涓嶈兘鍖呭惈鎹㈣鎴?鍒嗗彿")
     return ob
 
+def _validate_view_name(name: str, label: str) -> str:
+    out = (name or "").strip()
+    if not out:
+        raise RuntimeError(f"{label} cannot be empty")
+    if len(out) > 128:
+        raise RuntimeError(f"{label} too long")
+    if any(ch in out for ch in ("\r", "\n", ";", "\\", "/")):
+        raise RuntimeError(f"{label} contains invalid characters")
+    return out
+
 
 def _query_rows(
     arcpy: Any,
@@ -202,7 +212,7 @@ def _query_rows(
     valid = {f.name for f in arcpy.ListFields(dataset_path)}
     missing = [f for f in fnames if f not in valid]
     if missing:
-        raise RuntimeError(f"鏈煡瀛楁锛歿missing}锛屽彲閫夛細{sorted(valid)[:40]}...")
+        raise RuntimeError("Invalid arguments")
     cursor_fields = list(fnames)
     if include_shape_wkt:
         cursor_fields.append("SHAPE@WKT")
@@ -312,10 +322,7 @@ def _describe_summary(arcpy: Any, dataset_path: str) -> dict[str, Any]:
 
 @mcp.tool(
     name="arcgis_pro_environment_info",
-    description=(
-        "返回当前 ArcPy / ArcGIS Pro 安装与产品信息（无需打开 .aprx）。"
-        "用于确认是否使用了 Pro 自带的 Python。"
-    ),
+    description="",
 )
 def arcgis_pro_environment_info() -> str:
     arcpy = _arcpy()
@@ -336,10 +343,7 @@ def arcgis_pro_environment_info() -> str:
 
 @mcp.tool(
     name="arcgis_pro_server_capabilities",
-    description=(
-        "返回当前进程的安全开关与已注册工具分类摘要：是否允许写入、导出根目录是否配置、"
-        "白名单 GP 工具列表等。调用方可据此决定可用能力。"
-    ),
+    description="",
 )
 def arcgis_pro_server_capabilities() -> str:
     write = writes_allowed()
@@ -566,7 +570,7 @@ def arcgis_pro_server_capabilities() -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_maps",
-    description="列出指定 .aprx 工程内的所有地图名称。必须在 ArcGIS Pro 的 Python 环境中运行。",
+    description="",
 )
 def arcgis_pro_list_maps(aprx_path: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -576,7 +580,7 @@ def arcgis_pro_list_maps(aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_layouts",
-    description="列出 .aprx 中所有布局（Layout）名称。需 ArcGIS Pro Python。",
+    description="",
 )
 def arcgis_pro_list_layouts(aprx_path: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -586,7 +590,7 @@ def arcgis_pro_list_layouts(aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_reports",
-    description="列出工程中的报表（Report）名称。部分旧版本 Pro 可能不支持 listReports。",
+    description="",
 )
 def arcgis_pro_list_reports(aprx_path: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -606,10 +610,7 @@ def arcgis_pro_list_reports(aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_describe",
-    description=(
-        "对数据集、图层数据源或工作空间路径执行 arcpy.Describe，返回常用属性子集（类型、范围、空间参考等）。"
-        "dataset_path 可为要素类、栅格、图层数据源字符串、GDB 路径等。"
-    ),
+    description="",
 )
 def arcgis_pro_describe(dataset_path: str) -> str:
     arcpy = _arcpy()
@@ -625,7 +626,7 @@ def arcgis_pro_describe(dataset_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_fields",
-    description="列出表或要素类的字段：名称、类型、别名、长度、精度、是否可空等（arcpy.ListFields）。",
+    description="",
 )
 def arcgis_pro_list_fields(dataset_path: str) -> str:
     arcpy = _arcpy()
@@ -655,10 +656,7 @@ def arcgis_pro_list_fields(dataset_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_project_connections",
-    description=(
-        "列出 .aprx 工程中的文件夹连接、数据库连接、工具箱等（取决于当前 Pro 版本的 API）。"
-        "用于检查工程引用的外部路径。"
-    ),
+    description="",
 )
 def arcgis_pro_project_connections(aprx_path: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -684,7 +682,7 @@ def arcgis_pro_project_connections(aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_project_summary",
-    description="工程概览：地图数、布局数、报表数（若支持）、损坏数据源条目（可限制条数）。",
+    description="",
 )
 def arcgis_pro_project_summary(
     aprx_path: str,
@@ -739,9 +737,7 @@ def arcgis_pro_project_summary(
 
 @mcp.tool(
     name="arcgis_pro_list_layers",
-    description=(
-        "列出某一地图中的图层：名称、是否组/栅格/要素图层、可见性，以及非组图层的数据源路径（若可读取）。"
-    ),
+    description="",
 )
 def arcgis_pro_list_layers(aprx_path: str, map_name: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -779,7 +775,7 @@ def arcgis_pro_list_layers(aprx_path: str, map_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_tables",
-    description="列出地图中打开的表（独立表、非图层表视图等，取决于工程内容）。",
+    description="",
 )
 def arcgis_pro_list_tables(aprx_path: str, map_name: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -817,7 +813,7 @@ def arcgis_pro_list_tables(aprx_path: str, map_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_map_spatial_reference",
-    description="读取地图的空间参考（名称、WKID、类型、WKT 片段）。",
+    description="",
 )
 def arcgis_pro_map_spatial_reference(aprx_path: str, map_name: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -836,7 +832,7 @@ def arcgis_pro_map_spatial_reference(aprx_path: str, map_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_map_camera",
-    description="读取地图默认视图（Camera）信息：比例尺、XY 等（若 API 可用）。",
+    description="",
 )
 def arcgis_pro_map_camera(aprx_path: str, map_name: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -870,7 +866,7 @@ def arcgis_pro_map_camera(aprx_path: str, map_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_list_bookmarks",
-    description="列出地图中的书签名称（及可获取的关联信息）。",
+    description="",
 )
 def arcgis_pro_list_bookmarks(aprx_path: str, map_name: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -909,10 +905,7 @@ def arcgis_pro_list_bookmarks(aprx_path: str, map_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_layer_properties",
-    description=(
-        "查询单个图层的常用制图与数据属性：可见性、透明度、定义查询、符号系统类型、"
-        "是否可编辑等（字段因图层类型而异）。"
-    ),
+    description="",
 )
 def arcgis_pro_layer_properties(
     aprx_path: str,
@@ -969,10 +962,7 @@ def arcgis_pro_layer_properties(
 
 @mcp.tool(
     name="arcgis_pro_list_layout_elements",
-    description=(
-        "列出布局中的元素：类型（如 MAPFRAME_ELEMENT、LEGEND_ELEMENT）、名称。"
-        "可选 element_type 过滤，例如仅列出 MAPFRAME_ELEMENT。"
-    ),
+    description="",
 )
 def arcgis_pro_list_layout_elements(
     aprx_path: str,
@@ -1005,7 +995,7 @@ def arcgis_pro_list_layout_elements(
 
 @mcp.tool(
     name="arcgis_pro_mapframe_extent",
-    description="读取布局中指定地图框（Map Frame）的当前范围与比例尺、所关联的地图名。",
+    description="",
 )
 def arcgis_pro_mapframe_extent(
     aprx_path: str,
@@ -1021,7 +1011,7 @@ def arcgis_pro_mapframe_extent(
             break
     if mf is None:
         names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
-        raise RuntimeError(f"未找到地图框 {mapframe_name!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
 
     out: dict[str, Any] = {
         "aprx_path": path,
@@ -1046,12 +1036,7 @@ def arcgis_pro_mapframe_extent(
 
 @mcp.tool(
     name="arcgis_pro_export_layout_pdf",
-    description=(
-        "将指定布局导出为 PDF 文件（对应 Pro 中布局的 exportToPDF）。"
-        "output_pdf_path 必须为绝对路径；若设置环境变量 ARCGIS_PRO_MCP_EXPORT_ROOT，"
-        "则导出路径解析后必须位于该目录下。若文件已存在可能被覆盖。"
-        "建议在导出前确认 .aprx 无独占写入冲突。"
-    ),
+    description="",
 )
 def arcgis_pro_export_layout_pdf(
     aprx_path: str,
@@ -1104,10 +1089,7 @@ def _clamp_dpi(resolution_dpi: int) -> int:
 
 @mcp.tool(
     name="arcgis_pro_export_layout_image",
-    description=(
-        "将布局导出为光栅图：format=png|jpeg|tiff，须使用绝对路径。"
-        "受 ARCGIS_PRO_MCP_EXPORT_ROOT 约束（若设置）。TIFF 可写 world_file。"
-    ),
+    description="",
 )
 def arcgis_pro_export_layout_image(
     aprx_path: str,
@@ -1169,7 +1151,7 @@ def arcgis_pro_export_layout_image(
 
 @mcp.tool(
     name="arcgis_pro_save_project",
-    description="保存对当前 .aprx 的内存修改到原文件。需 ARCGIS_PRO_MCP_ALLOW_WRITE=1；注意 Pro 独占打开时可能失败。",
+    description="",
 )
 def arcgis_pro_save_project(aprx_path: str) -> str:
     require_allow_write()
@@ -1180,7 +1162,7 @@ def arcgis_pro_save_project(aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_save_project_copy",
-    description="将工程另存为新 .aprx（saveACopy）。输出路径须满足 ARCGIS_PRO_MCP_EXPORT_ROOT（若设置）。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_save_project_copy(aprx_path: str, output_aprx_path: str) -> str:
     require_allow_write()
@@ -1199,7 +1181,7 @@ def arcgis_pro_save_project_copy(aprx_path: str, output_aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_set_layer_visible",
-    description="设置图层可见性。修改在 save_project 之前仅存在于内存。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_layer_visible(
     aprx_path: str,
@@ -1225,7 +1207,7 @@ def arcgis_pro_set_layer_visible(
 
 @mcp.tool(
     name="arcgis_pro_set_layer_transparency",
-    description="设置图层透明度 0–100。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_layer_transparency(
     aprx_path: str,
@@ -1252,7 +1234,7 @@ def arcgis_pro_set_layer_transparency(
 
 @mcp.tool(
     name="arcgis_pro_set_definition_query",
-    description="设置要素图层的定义查询 SQL 字符串。错误 SQL 可能导致图层无要素。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_definition_query(
     aprx_path: str,
@@ -1281,11 +1263,7 @@ def arcgis_pro_set_definition_query(
 
 @mcp.tool(
     name="arcgis_pro_select_layer_by_attribute",
-    description=(
-        "对地图中已存在图层执行 SelectLayerByAttribute。"
-        "selection_type 为固定枚举；where_clause 最长 8000。"
-        "会改变当前地图选择，需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_select_layer_by_attribute(
     aprx_path: str,
@@ -1300,7 +1278,7 @@ def arcgis_pro_select_layer_by_attribute(
     lyr = _find_layer(m, layer_name)
     st = selection_type.strip().upper()
     if st not in _SELECTION_TYPES:
-        raise RuntimeError(f"非法 selection_type，可选：{sorted(_SELECTION_TYPES)}")
+        raise RuntimeError("Invalid arguments")
     wc = where_clause.strip()
     if len(wc) > 8000:
         raise RuntimeError("where_clause 过长")
@@ -1317,11 +1295,60 @@ def arcgis_pro_select_layer_by_attribute(
 
 
 @mcp.tool(
+    name="arcgis_pro_make_feature_layer",
+    description="",
+)
+def arcgis_pro_make_feature_layer(
+    dataset_path: str,
+    out_layer_name: str,
+    where_clause: str = "",
+) -> str:
+    require_allow_write()
+    arcpy = _arcpy()
+    p = validate_input_path_optional(dataset_path, "dataset_path")
+    name = _validate_view_name(out_layer_name, "out_layer_name")
+    wc = (where_clause or "").strip()
+    if len(wc) > 8000:
+        raise RuntimeError("where_clause too long")
+    result = arcpy.management.MakeFeatureLayer(p, name, wc or None)
+    created_name = name
+    try:
+        created_name = str(result.getOutput(0))
+    except Exception:  # noqa: BLE001
+        pass
+    count = gp_allowlist.gp_get_count_layer(arcpy, created_name)
+    return _json_dumps({"ok": True, "dataset_path": p, "layer_name": created_name, "count": count})
+
+
+@mcp.tool(
+    name="arcgis_pro_make_table_view",
+    description="",
+)
+def arcgis_pro_make_table_view(
+    dataset_path: str,
+    out_view_name: str,
+    where_clause: str = "",
+) -> str:
+    require_allow_write()
+    arcpy = _arcpy()
+    p = validate_input_path_optional(dataset_path, "dataset_path")
+    name = _validate_view_name(out_view_name, "out_view_name")
+    wc = (where_clause or "").strip()
+    if len(wc) > 8000:
+        raise RuntimeError("where_clause too long")
+    result = arcpy.management.MakeTableView(p, name, wc or None)
+    created_name = name
+    try:
+        created_name = str(result.getOutput(0))
+    except Exception:  # noqa: BLE001
+        pass
+    count = gp_allowlist.gp_get_count(arcpy, created_name)
+    return _json_dumps({"ok": True, "dataset_path": p, "view_name": created_name, "count": count})
+
+
+@mcp.tool(
     name="arcgis_pro_mapframe_zoom_to_bookmark",
-    description=(
-        "将布局中的地图框缩放到指定书签视图（会改变布局中地图框状态，非纯只读）。"
-        "书签来自该地图框所关联的地图。需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_mapframe_zoom_to_bookmark(
     aprx_path: str,
@@ -1339,7 +1366,7 @@ def arcgis_pro_mapframe_zoom_to_bookmark(
             break
     if mf is None:
         names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
-        raise RuntimeError(f"未找到地图框 {mapframe_name!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
     bkmk = None
     try:
         for b in mf.map.listBookmarks():
@@ -1347,10 +1374,10 @@ def arcgis_pro_mapframe_zoom_to_bookmark(
                 bkmk = b
                 break
     except Exception as ex:  # noqa: BLE001
-        raise RuntimeError(f"读取书签失败：{ex!s}") from ex
+        raise RuntimeError("Invalid arguments") from e
     if bkmk is None:
         names = [b.name for b in mf.map.listBookmarks()]
-        raise RuntimeError(f"未找到书签 {bookmark_name!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
     mf.zoomToBookmark(bkmk)  # type: ignore[attr-defined]
     return _json_dumps(
         {
@@ -1365,7 +1392,7 @@ def arcgis_pro_mapframe_zoom_to_bookmark(
 
 @mcp.tool(
     name="arcgis_pro_add_layer_from_path",
-    description="向地图添加数据（addDataFromPath）。data_path 若配置 ARCGIS_PRO_MCP_INPUT_ROOTS 则须在其下。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_add_layer_from_path(
     aprx_path: str,
@@ -1384,7 +1411,7 @@ def arcgis_pro_add_layer_from_path(
 
 @mcp.tool(
     name="arcgis_pro_remove_layer",
-    description="从地图中移除指定图层（removeLayer）。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_remove_layer(aprx_path: str, map_name: str, layer_name: str) -> str:
     require_allow_write()
@@ -1399,7 +1426,7 @@ def arcgis_pro_remove_layer(aprx_path: str, map_name: str, layer_name: str) -> s
 
 @mcp.tool(
     name="arcgis_pro_add_table_from_path",
-    description="向地图添加独立表（addDataFromPath）。table_path 若配置 ARCGIS_PRO_MCP_INPUT_ROOTS 则须在其下。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_add_table_from_path(
     aprx_path: str,
@@ -1420,7 +1447,7 @@ def arcgis_pro_add_table_from_path(
 
 @mcp.tool(
     name="arcgis_pro_remove_table",
-    description="从地图中移除指定独立表。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_remove_table(aprx_path: str, map_name: str, table_name: str) -> str:
     require_allow_write()
@@ -1435,7 +1462,7 @@ def arcgis_pro_remove_table(aprx_path: str, map_name: str, table_name: str) -> s
             break
     if target is None:
         names = [tbl.name for tbl in m.listTables()]  # type: ignore[attr-defined]
-        raise RuntimeError(f"未找到表 {table_name!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
     if hasattr(m, "removeTable"):
         m.removeTable(target)  # type: ignore[attr-defined]
     elif hasattr(m, "removeItem"):
@@ -1449,7 +1476,7 @@ def arcgis_pro_remove_table(aprx_path: str, map_name: str, table_name: str) -> s
 
 @mcp.tool(
     name="arcgis_pro_gp_list_registered",
-    description="列出本服务白名单内的地理处理类 MCP 工具及说明。",
+    description="",
 )
 def arcgis_pro_gp_list_registered() -> str:
     return _json_dumps({"gp_tools": gp_allowlist.list_registered_gp_tools()})
@@ -1457,7 +1484,7 @@ def arcgis_pro_gp_list_registered() -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_get_count",
-    description="白名单 GP：GetCount。dataset_path 可受 ARCGIS_PRO_MCP_INPUT_ROOTS 约束。",
+    description="",
 )
 def arcgis_pro_gp_get_count(dataset_path: str) -> str:
     arcpy = _arcpy()
@@ -1468,7 +1495,7 @@ def arcgis_pro_gp_get_count(dataset_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_get_raster_property",
-    description="白名单 GP：GetRasterProperties，property_type 仅允许预置枚举。",
+    description="",
 )
 def arcgis_pro_gp_get_raster_property(
     raster_path: str,
@@ -1484,7 +1511,7 @@ def arcgis_pro_gp_get_raster_property(
 
 @mcp.tool(
     name="arcgis_pro_gp_get_cell_value",
-    description="白名单 GP：GetCellValue。location_xy 为两个数字（空格或逗号分隔），与栅格空间参考一致。",
+    description="",
 )
 def arcgis_pro_gp_get_cell_value(
     raster_path: str,
@@ -1501,7 +1528,7 @@ def arcgis_pro_gp_get_cell_value(
 
 @mcp.tool(
     name="arcgis_pro_gp_test_schema_lock",
-    description="白名单 GP：TestSchemaLock，返回数据集是否可编辑（方案锁）。",
+    description="",
 )
 def arcgis_pro_gp_test_schema_lock(dataset_path: str) -> str:
     arcpy = _arcpy()
@@ -1512,7 +1539,7 @@ def arcgis_pro_gp_test_schema_lock(dataset_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_workspace_list_feature_classes",
-    description="在工作空间中列出要素类（ListFeatureClasses）。路径受 INPUT_ROOTS 约束（若设置）。",
+    description="",
 )
 def arcgis_pro_workspace_list_feature_classes(
     workspace_path: str,
@@ -1531,7 +1558,7 @@ def arcgis_pro_workspace_list_feature_classes(
 
 @mcp.tool(
     name="arcgis_pro_workspace_list_rasters",
-    description="在工作空间中列出栅格（ListRasters）。",
+    description="",
 )
 def arcgis_pro_workspace_list_rasters(
     workspace_path: str,
@@ -1546,7 +1573,7 @@ def arcgis_pro_workspace_list_rasters(
 
 @mcp.tool(
     name="arcgis_pro_workspace_list_tables",
-    description="在工作空间中列出表（ListTables）。",
+    description="",
 )
 def arcgis_pro_workspace_list_tables(
     workspace_path: str,
@@ -1561,10 +1588,7 @@ def arcgis_pro_workspace_list_tables(
 
 @mcp.tool(
     name="arcgis_pro_da_table_sample",
-    description=(
-        "只读 SearchCursor：按字段白名单返回最多 max_rows 行；禁止 *；可选 where_clause；"
-        "include_shape_wkt 时附加 SHAPE@WKT（可能很大，注意 max_rows）。"
-    ),
+    description="",
 )
 def arcgis_pro_da_table_sample(
     dataset_path: str,
@@ -1583,10 +1607,7 @@ def arcgis_pro_da_table_sample(
 
 @mcp.tool(
     name="arcgis_pro_da_query_rows",
-    description=(
-        "鍙 SearchCursor 鏌ヨ锛氭寜 fields / where_clause / order_by 杩斿洖绋冲畾琛屽垪銆?"
-        "max_rows 涓婇檺锛屼笖鍙€夋寚瀹?offset 銆佸寘鍚?SHAPE@WKT銆傚彧璇汇€?"
-    ),
+    description="",
 )
 def arcgis_pro_da_query_rows(
     dataset_path: str,
@@ -1621,7 +1642,7 @@ def arcgis_pro_da_query_rows(
 
 @mcp.tool(
     name="arcgis_pro_da_distinct_values",
-    description="只读：对单字段扫描（有上限）收集不重复值，用于快速了解域值分布。",
+    description="",
 )
 def arcgis_pro_da_distinct_values(
     dataset_path: str,
@@ -1650,7 +1671,7 @@ _PLACE_LAYER = frozenset({"BEFORE", "AFTER"})
 
 @mcp.tool(
     name="arcgis_pro_create_group_layer",
-    description="在地图上创建空组图层（createGroupLayer）。需 ALLOW_WRITE；建议随后 save_project。",
+    description="",
 )
 def arcgis_pro_create_group_layer(aprx_path: str, map_name: str, group_layer_name: str) -> str:
     require_allow_write()
@@ -1672,7 +1693,7 @@ def arcgis_pro_create_group_layer(aprx_path: str, map_name: str, group_layer_nam
 
 @mcp.tool(
     name="arcgis_pro_move_layer",
-    description="相对参考图层移动图层顺序（moveLayer），placement 为 BEFORE 或 AFTER。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_move_layer(
     aprx_path: str,
@@ -1688,7 +1709,7 @@ def arcgis_pro_move_layer(
     mov = _find_layer(m, layer_to_move_name)
     pl = placement.strip().upper()
     if pl not in _PLACE_LAYER:
-        raise RuntimeError(f"placement 须为 {sorted(_PLACE_LAYER)}")
+        raise RuntimeError("Invalid arguments")
     m.moveLayer(ref, mov, pl)  # type: ignore[attr-defined]
     return _json_dumps(
         {
@@ -1704,7 +1725,7 @@ def arcgis_pro_move_layer(
 
 @mcp.tool(
     name="arcgis_pro_rename_layer",
-    description="重命名图层（Layer.name）。若存在同名图层可能产生歧义。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_rename_layer(
     aprx_path: str,
@@ -1733,7 +1754,7 @@ def arcgis_pro_rename_layer(
 
 @mcp.tool(
     name="arcgis_pro_set_map_reference_scale",
-    description="设置地图参考比例尺（0 表示无参考比例尺）。影响符号与注记显示。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_map_reference_scale(
     aprx_path: str,
@@ -1759,7 +1780,7 @@ def arcgis_pro_set_map_reference_scale(
 
 @mcp.tool(
     name="arcgis_pro_set_map_default_camera",
-    description="设置地图默认 Camera 的 scale/heading/pitch/roll（传入的数值才会更新）。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_map_default_camera(
     aprx_path: str,
@@ -1823,10 +1844,7 @@ _JOIN_TYPES = frozenset({"KEEP_ALL", "KEEP_COMMON"})
 
 @mcp.tool(
     name="arcgis_pro_select_layer_by_location",
-    description=(
-        "按位置选择：SelectLayerByLocation，输入与选择图层须在同一地图内。"
-        "overlap_type 已白名单；距离类关系必须提供 search_distance（如 \"500 Meters\"）。需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_select_layer_by_location(
     aprx_path: str,
@@ -1845,13 +1863,13 @@ def arcgis_pro_select_layer_by_location(
     sel_lyr = _find_layer(m, selecting_layer_name)
     ov = overlap_type.strip().upper()
     if ov not in _OVERLAP_LOCATION:
-        raise RuntimeError(f"不支持的 overlap_type，可选示例：{sorted(_OVERLAP_LOCATION)}")
+        raise RuntimeError("Invalid arguments")
     sd = (search_distance or "").strip()
     if ov in _DISTANCE_OVERLAP and not sd:
         raise RuntimeError("当前 overlap_type 必须提供 search_distance")
     st = selection_type.strip().upper()
     if st not in _SELECTION_TYPES:
-        raise RuntimeError(f"非法 selection_type，可选：{sorted(_SELECTION_TYPES)}")
+        raise RuntimeError("Invalid arguments")
     inv = "INVERT" if invert_spatial_relationship else "NOT_INVERT"
     arcpy.management.SelectLayerByLocation(
         input_lyr,
@@ -1876,7 +1894,7 @@ def arcgis_pro_select_layer_by_location(
 
 @mcp.tool(
     name="arcgis_pro_clear_map_selection",
-    description="清除地图上要素图层的选择集（每层执行 CLEAR_SELECTION）。scope=all_layers 或指定 layer_name。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_clear_map_selection(
     aprx_path: str,
@@ -1915,7 +1933,7 @@ def arcgis_pro_clear_map_selection(
 
 @mcp.tool(
     name="arcgis_pro_layer_selection_count",
-    description="返回图层当前选择集要素数（GetCount；有选择集时计数为选中数量）。只读。",
+    description="",
 )
 def arcgis_pro_layer_selection_count(
     aprx_path: str,
@@ -1938,7 +1956,7 @@ def arcgis_pro_layer_selection_count(
 
 @mcp.tool(
     name="arcgis_pro_layer_selection_fids",
-    description="列出当前选择集中的 OID（OID@），最多 max_fids 条。无选择时可能返回空列表。只读。",
+    description="",
 )
 def arcgis_pro_layer_selection_fids(
     aprx_path: str,
@@ -1971,10 +1989,7 @@ def arcgis_pro_layer_selection_fids(
 
 @mcp.tool(
     name="arcgis_pro_gp_buffer",
-    description=(
-        "analysis.Buffer：输出须位于 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT（该变量必须已设置）。"
-        "须 ALLOW_WRITE；输入路径受 INPUT_ROOTS 约束（若设置）。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_buffer(
     in_features: str,
@@ -1994,7 +2009,7 @@ def arcgis_pro_gp_buffer(
 
 @mcp.tool(
     name="arcgis_pro_gp_clip",
-    description="analysis.Clip：输出须在 GP_OUTPUT_ROOT（必填）；须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_clip(
     in_features: str,
@@ -2015,7 +2030,7 @@ def arcgis_pro_gp_clip(
 
 @mcp.tool(
     name="arcgis_pro_gp_analysis_select",
-    description="analysis.Select：按 where_clause 子集输出要素类；输出须在 GP_OUTPUT_ROOT；须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_analysis_select(
     in_features: str,
@@ -2035,7 +2050,7 @@ def arcgis_pro_gp_analysis_select(
 
 @mcp.tool(
     name="arcgis_pro_gp_copy_features",
-    description="management.CopyFeatures：复制到 GP_OUTPUT_ROOT 下；须 ALLOW_WRITE 且配置 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_copy_features(in_features: str, out_feature_class: str) -> str:
     arcpy = _arcpy()
@@ -2051,7 +2066,7 @@ def arcgis_pro_gp_copy_features(in_features: str, out_feature_class: str) -> str
 
 @mcp.tool(
     name="arcgis_pro_add_join",
-    description="management.AddJoin：图层字段连接至表路径。join_type 为 KEEP_ALL 或 KEEP_COMMON。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_add_join(
     aprx_path: str,
@@ -2068,7 +2083,7 @@ def arcgis_pro_add_join(
     lyr = _find_layer(m, layer_name)
     jt = join_type.strip().upper()
     if jt not in _JOIN_TYPES:
-        raise RuntimeError(f"join_type 须为 {sorted(_JOIN_TYPES)}")
+        raise RuntimeError("Invalid arguments")
     jpath = validate_input_path_optional(join_table_path, "join_table_path")
     arcpy.management.AddJoin(lyr, layer_field.strip(), jpath, join_field.strip(), jt)
     return _json_dumps(
@@ -2084,7 +2099,7 @@ def arcgis_pro_add_join(
 
 @mcp.tool(
     name="arcgis_pro_remove_join",
-    description="management.RemoveJoin：join_name 为空则移除该图层全部连接（行为依 Pro 版本而定）。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_remove_join(
     aprx_path: str,
@@ -2127,15 +2142,12 @@ def _find_layout_text_element(layout: Any, element_name: str, element_type: str)
         for elm in layout.listElements(tt):
             if getattr(elm, "name", "") == en:
                 return elm
-    raise RuntimeError(f"未找到布局文本元素 {en!r}，已查：{order}")
+    raise RuntimeError("Invalid arguments")
 
 
 @mcp.tool(
     name="arcgis_pro_update_layout_text_element",
-    description=(
-        "修改布局中文本元素的 .text。element_type 可空（依次查 TEXT_ELEMENT、TEXT_GRAPHIC_ELEMENT）。"
-        "若原文含动态文本片段（<dyn…）且未设 allow_dynamic_text_overwrite=true 则拒绝。需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_update_layout_text_element(
     aprx_path: str,
@@ -2165,11 +2177,7 @@ def arcgis_pro_update_layout_text_element(
 
 @mcp.tool(
     name="arcgis_pro_set_mapframe_extent",
-    description=(
-        "设置布局中地图框的显示范围（MapFrame.setExtent）。"
-        "坐标为 xmin/ymin/xmax/ymax；spatial_reference_wkid 为空则使用当前地图框空间参考。"
-        "需 ALLOW_WRITE；建议随后 save_project。"
-    ),
+    description="",
 )
 def arcgis_pro_set_mapframe_extent(
     aprx_path: str,
@@ -2191,7 +2199,7 @@ def arcgis_pro_set_mapframe_extent(
             break
     if mf is None:
         names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
-        raise RuntimeError(f"未找到地图框 {mapframe_name!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
     ext = arcpy.Extent(float(xmin), float(ymin), float(xmax), float(ymax))  # type: ignore[attr-defined]
     if spatial_reference_wkid is not None:
         ext.spatialReference = arcpy.SpatialReference(int(spatial_reference_wkid))  # type: ignore[attr-defined]
@@ -2224,7 +2232,7 @@ def _symbology_template_path(path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_set_map_spatial_reference",
-    description="设置地图的空间参考（SpatialReference factoryCode / WKID）。需 ALLOW_WRITE；影响整图显示与分析上下文。",
+    description="",
 )
 def arcgis_pro_set_map_spatial_reference(
     aprx_path: str,
@@ -2242,11 +2250,7 @@ def arcgis_pro_set_map_spatial_reference(
 
 @mcp.tool(
     name="arcgis_pro_layer_replace_data_source",
-    description=(
-        "Layer.replaceDataSource：用新的 workspace 与要素类名修复/替换数据源。"
-        "dataset_type 示例：FEATURE_CLASS、SHAPEFILE_WORKSPACE、RASTER_DATASET、TEXT_TABLE。"
-        "需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_layer_replace_data_source(
     aprx_path: str,
@@ -2284,10 +2288,7 @@ def arcgis_pro_layer_replace_data_source(
 
 @mcp.tool(
     name="arcgis_pro_apply_symbology_from_layer",
-    description=(
-        "management.ApplySymbologyFromLayer：从 .lyrx/.lyr 模板应用符号系统到地图图层。"
-        "模板路径受 INPUT_ROOTS 约束（若设置）。需 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_apply_symbology_from_layer(
     aprx_path: str,
@@ -2314,7 +2315,7 @@ def arcgis_pro_apply_symbology_from_layer(
 
 @mcp.tool(
     name="arcgis_pro_set_layer_scale_range",
-    description="设置图层可见比例范围 minimumScale / maximumScale（0 通常表示不限制）。至少传入一个比例。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_layer_scale_range(
     aprx_path: str,
@@ -2349,7 +2350,7 @@ def arcgis_pro_set_layer_scale_range(
 
 @mcp.tool(
     name="arcgis_pro_toggle_layer_labels",
-    description="开关图层标注（Layer.showLabels）。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_toggle_layer_labels(
     aprx_path: str,
@@ -2375,7 +2376,7 @@ def arcgis_pro_toggle_layer_labels(
 
 @mcp.tool(
     name="arcgis_pro_gp_dissolve",
-    description="analysis.Dissolve；输出须在 GP_OUTPUT_ROOT；须 ALLOW_WRITE。可选 dissolve_field。",
+    description="",
 )
 def arcgis_pro_gp_dissolve(
     in_features: str,
@@ -2395,7 +2396,7 @@ def arcgis_pro_gp_dissolve(
 
 @mcp.tool(
     name="arcgis_pro_gp_intersect",
-    description="analysis.Intersect，至少 2 个输入路径；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_intersect(
     in_feature_paths: list[str],
@@ -2414,7 +2415,7 @@ def arcgis_pro_gp_intersect(
 
 @mcp.tool(
     name="arcgis_pro_gp_union",
-    description="analysis.Union，至少 2 个输入；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_union(
     in_feature_paths: list[str],
@@ -2433,7 +2434,7 @@ def arcgis_pro_gp_union(
 
 @mcp.tool(
     name="arcgis_pro_gp_erase",
-    description="analysis.Erase；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_erase(
     in_features: str,
@@ -2454,7 +2455,7 @@ def arcgis_pro_gp_erase(
 
 @mcp.tool(
     name="arcgis_pro_gp_spatial_join",
-    description="analysis.SpatialJoin（默认参数）；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_spatial_join(
     target_features: str,
@@ -2475,7 +2476,7 @@ def arcgis_pro_gp_spatial_join(
 
 @mcp.tool(
     name="arcgis_pro_gp_statistics",
-    description="analysis.Statistics（汇总统计）；statistics_fields 如 \"POP SUM;AREA MEAN\"；输出表在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_statistics(
     in_table: str,
@@ -2496,7 +2497,7 @@ def arcgis_pro_gp_statistics(
 
 @mcp.tool(
     name="arcgis_pro_gp_frequency",
-    description="analysis.Frequency；frequency_fields 可用分号分隔多字段；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_frequency(
     in_table: str,
@@ -2517,7 +2518,7 @@ def arcgis_pro_gp_frequency(
 
 @mcp.tool(
     name="arcgis_pro_gp_table_select",
-    description="analysis.TableSelect；可选 where_clause；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_table_select(
     in_table: str,
@@ -2537,7 +2538,7 @@ def arcgis_pro_gp_table_select(
 
 @mcp.tool(
     name="arcgis_pro_gp_merge",
-    description="management.Merge；至少 2 个输入；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_merge(
     in_feature_paths: list[str],
@@ -2556,7 +2557,7 @@ def arcgis_pro_gp_merge(
 
 @mcp.tool(
     name="arcgis_pro_gp_project",
-    description="management.Project：要素类/栅格等投影到 out_wkid；可选 transform_method；输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_project(
     in_dataset: str,
@@ -2578,10 +2579,7 @@ def arcgis_pro_gp_project(
 
 @mcp.tool(
     name="arcgis_pro_gp_add_field",
-    description=(
-        "management.AddField：原地修改表/要素类结构。须 ALLOW_WRITE；路径受 INPUT_ROOTS 约束（若设置）。"
-        "field_type 为 TEXT/SHORT/LONG/FLOAT/DOUBLE/DATE；TEXT 默认长度 255。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_add_field(
     in_table: str,
@@ -2603,10 +2601,7 @@ def arcgis_pro_gp_add_field(
 
 @mcp.tool(
     name="arcgis_pro_gp_delete_field",
-    description=(
-        "management.DeleteField：删除字段。drop_field 可为单个名称或多个（逗号/分号分隔）。"
-        "禁止删除 OBJECTID/SHAPE 等系统字段。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_delete_field(in_table: str, drop_field: str) -> str:
     arcpy = _arcpy()
@@ -2618,10 +2613,7 @@ def arcgis_pro_gp_delete_field(in_table: str, drop_field: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_da_update_field_constant",
-    description=(
-        "UpdateCursor：将单字段更新为常量（value_string 按字段类型解析；空字符串写 NULL）。"
-        "max_rows_updated 上限 5000；可选 where_clause。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_da_update_field_constant(
     dataset_path: str,
@@ -2652,7 +2644,7 @@ def arcgis_pro_da_update_field_constant(
 
 @mcp.tool(
     name="arcgis_pro_gp_export_features",
-    description="management.ExportFeatures：导出要素；输出须在 GP_OUTPUT_ROOT。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_export_features(in_features: str, out_path: str) -> str:
     arcpy = _arcpy()
@@ -2668,7 +2660,7 @@ def arcgis_pro_gp_export_features(in_features: str, out_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_export_table",
-    description="management.ExportTable：导出表；输出须在 GP_OUTPUT_ROOT。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_export_table(in_table: str, out_path: str) -> str:
     arcpy = _arcpy()
@@ -2684,10 +2676,7 @@ def arcgis_pro_gp_export_table(in_table: str, out_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_near",
-    description=(
-        "analysis.Near：在输入要素上写入最近邻距离/ID 等字段（原地修改 in_features，不产生新输出）。"
-        "须 ALLOW_WRITE；路径受 INPUT_ROOTS（若设置）。不使用 GP_OUTPUT_ROOT。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_near(in_features: str, near_features: str) -> str:
     arcpy = _arcpy()
@@ -2703,7 +2692,7 @@ def arcgis_pro_gp_near(in_features: str, near_features: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_generate_near_table",
-    description="analysis.GenerateNearTable：输出邻近关系表，路径须在 GP_OUTPUT_ROOT。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_generate_near_table(
     in_features: str,
@@ -2729,10 +2718,7 @@ def arcgis_pro_gp_generate_near_table(
 
 @mcp.tool(
     name="arcgis_pro_da_insert_features",
-    description=(
-        "InsertCursor：向要素类/表插入新行。fields 为字段名列表（几何用 SHAPE@WKT），"
-        "rows 为二维数组，每行值数须与 fields 一致。单次最多 5000 行。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_da_insert_features(
     dataset_path: str,
@@ -2748,11 +2734,7 @@ def arcgis_pro_da_insert_features(
 
 @mcp.tool(
     name="arcgis_pro_da_update_features",
-    description=(
-        "UpdateCursor：批量将 updates 字典中的字段更新为指定常量值。"
-        "field_name 用作游标的首字段（通常为 OID 或某标识字段），updates 为 {字段名: 值}。"
-        "可选 where_clause 过滤；max_rows_updated 上限 5000。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_da_update_features(
     dataset_path: str,
@@ -2777,10 +2759,7 @@ def arcgis_pro_da_update_features(
 
 @mcp.tool(
     name="arcgis_pro_da_delete_selected",
-    description=(
-        "DeleteCursor：按 where_clause 条件删除要素。where_clause 不可为空（防止误删全部），"
-        "如需清空请用 truncate_table。max_rows_deleted 上限 5000。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_da_delete_selected(
     dataset_path: str,
@@ -2801,10 +2780,7 @@ def arcgis_pro_da_delete_selected(
 
 @mcp.tool(
     name="arcgis_pro_gp_calculate_field",
-    description=(
-        "management.CalculateField：字段计算器。expression 为 Python3/Arcade/VBScript 表达式，"
-        "expression_type 默认 PYTHON3。code_block 可传入辅助函数。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_calculate_field(
     in_table: str,
@@ -2835,11 +2811,7 @@ def arcgis_pro_gp_calculate_field(
 
 @mcp.tool(
     name="arcgis_pro_gp_calculate_geometry",
-    description=(
-        "management.CalculateGeometryAttributes：计算几何属性（面积、长度、坐标等）。"
-        "geometry_property 为列表，如 [[\"AREA_FIELD\",\"AREA\"],[\"LENGTH_FIELD\",\"PERIMETER_LENGTH\"]]。"
-        "须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_calculate_geometry(
     in_features: str,
@@ -2865,10 +2837,7 @@ def arcgis_pro_gp_calculate_geometry(
 
 @mcp.tool(
     name="arcgis_pro_gp_append",
-    description=(
-        "management.Append：将输入追加到目标要素类/表。schema_type 为 TEST 或 NO_TEST。"
-        "输出为原地修改目标。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_append(
     inputs: list[str],
@@ -2890,10 +2859,7 @@ def arcgis_pro_gp_append(
 
 @mcp.tool(
     name="arcgis_pro_gp_delete_features",
-    description=(
-        "management.DeleteFeatures：删除要素类中所有要素（或当前选择集要素）。"
-        "常与 SelectLayerByAttribute 配合使用。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_delete_features(in_features: str) -> str:
     require_allow_write()
@@ -2905,7 +2871,7 @@ def arcgis_pro_gp_delete_features(in_features: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_truncate_table",
-    description="management.TruncateTable：清空表/要素类中所有记录。不可撤销！须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_truncate_table(in_table: str) -> str:
     require_allow_write()
@@ -2922,10 +2888,7 @@ def arcgis_pro_gp_truncate_table(in_table: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_create_feature_class",
-    description=(
-        "management.CreateFeatureclass：创建新要素类。geometry_type 为 POINT/MULTIPOINT/POLYLINE/POLYGON。"
-        "输出在 GP_OUTPUT_ROOT；可选 spatial_reference_wkid。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_create_feature_class(
     out_path: str,
@@ -2942,7 +2905,7 @@ def arcgis_pro_gp_create_feature_class(
 
 @mcp.tool(
     name="arcgis_pro_gp_create_table",
-    description="management.CreateTable：在 GP_OUTPUT_ROOT 下创建独立表。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_create_table(out_path: str, out_name: str) -> str:
     arcpy = _arcpy()
@@ -2952,7 +2915,7 @@ def arcgis_pro_gp_create_table(out_path: str, out_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_create_file_gdb",
-    description="management.CreateFileGDB：在 GP_OUTPUT_ROOT 下创建文件地理数据库。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_create_file_gdb(out_folder_path: str, out_name: str) -> str:
     arcpy = _arcpy()
@@ -2962,7 +2925,7 @@ def arcgis_pro_gp_create_file_gdb(out_folder_path: str, out_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_create_feature_dataset",
-    description="management.CreateFeatureDataset：在 GDB 内创建要素数据集。须指定 spatial_reference_wkid。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_create_feature_dataset(
     out_dataset_path: str,
@@ -2978,7 +2941,7 @@ def arcgis_pro_gp_create_feature_dataset(
 
 @mcp.tool(
     name="arcgis_pro_gp_copy_feature_class",
-    description="management.CopyFeatures：复制要素类到新位置（GP_OUTPUT_ROOT 下）。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_copy_feature_class(in_features: str, out_feature_class: str) -> str:
     arcpy = _arcpy()
@@ -2994,7 +2957,7 @@ def arcgis_pro_gp_copy_feature_class(in_features: str, out_feature_class: str) -
 
 @mcp.tool(
     name="arcgis_pro_gp_rename_dataset",
-    description="management.Rename：重命名数据集（要素类、表等）。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_rename_dataset(in_data: str, out_data: str) -> str:
     arcpy = _arcpy()
@@ -3006,7 +2969,7 @@ def arcgis_pro_gp_rename_dataset(in_data: str, out_data: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_delete_dataset",
-    description="management.Delete：删除数据集（要素类、表、GDB 等）。不可撤销！须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_delete_dataset(in_data: str) -> str:
     arcpy = _arcpy()
@@ -3016,9 +2979,7 @@ def arcgis_pro_gp_delete_dataset(in_data: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_alter_field",
-    description=(
-        "management.AlterField：修改字段名称或别名。至少提供 new_field_name 或 new_field_alias 之一。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_alter_field(
     in_table: str,
@@ -3046,10 +3007,7 @@ def arcgis_pro_gp_alter_field(
 
 @mcp.tool(
     name="arcgis_pro_gp_import_csv_to_table",
-    description=(
-        "conversion.TableToTable：将 CSV 文件导入为 GDB 表。"
-        "in_rows 为 CSV 文件路径，out_path 为目标 GDB 路径，out_name 为表名。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_import_csv_to_table(
     in_rows: str,
@@ -3063,10 +3021,7 @@ def arcgis_pro_gp_import_csv_to_table(
 
 @mcp.tool(
     name="arcgis_pro_gp_xy_table_to_point",
-    description=(
-        "management.XYTableToPoint：将含 XY 坐标的表转为点要素类。"
-        "须指定 x_field、y_field；默认 WGS84（4326）。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_xy_table_to_point(
     in_table: str,
@@ -3086,7 +3041,7 @@ def arcgis_pro_gp_xy_table_to_point(
 
 @mcp.tool(
     name="arcgis_pro_gp_json_to_features",
-    description="conversion.JSONToFeatures：将 GeoJSON/JSON 文件转为要素类。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_json_to_features(in_json_file: str, out_features: str) -> str:
     arcpy = _arcpy()
@@ -3096,10 +3051,7 @@ def arcgis_pro_gp_json_to_features(in_json_file: str, out_features: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_features_to_json",
-    description=(
-        "conversion.FeaturesToJSON：将要素类导出为 GeoJSON/JSON 文件。"
-        "可选 format_json、include_z_values、include_m_values。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_features_to_json(
     in_features: str,
@@ -3117,7 +3069,7 @@ def arcgis_pro_gp_features_to_json(
 
 @mcp.tool(
     name="arcgis_pro_gp_kml_to_layer",
-    description="conversion.KMLToLayer：将 KML/KMZ 文件转为图层（输出到文件夹）。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_kml_to_layer(in_kml_file: str, output_folder: str) -> str:
     arcpy = _arcpy()
@@ -3127,7 +3079,7 @@ def arcgis_pro_gp_kml_to_layer(in_kml_file: str, output_folder: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_excel_to_table",
-    description="conversion.ExcelToTable：将 Excel 文件导入为 GDB 表。可选指定 sheet。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_excel_to_table(
     input_excel: str,
@@ -3141,7 +3093,7 @@ def arcgis_pro_gp_excel_to_table(
 
 @mcp.tool(
     name="arcgis_pro_gp_table_to_excel",
-    description="conversion.TableToExcel：将表导出为 Excel 文件。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_table_to_excel(in_table: str, output_excel: str) -> str:
     arcpy = _arcpy()
@@ -3151,7 +3103,7 @@ def arcgis_pro_gp_table_to_excel(in_table: str, output_excel: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_feature_class_to_shapefile",
-    description="conversion.FeatureClassToShapefile：将要素类导出为 Shapefile。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_feature_class_to_shapefile(
     input_features: list[str],
@@ -3169,10 +3121,7 @@ def arcgis_pro_gp_feature_class_to_shapefile(
 
 @mcp.tool(
     name="arcgis_pro_gp_multiple_ring_buffer",
-    description=(
-        "analysis.MultipleRingBuffer：多环缓冲区。distances 为距离列表，"
-        "buffer_unit 默认 Meters，dissolve_option 为 ALL 或 NONE。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_multiple_ring_buffer(
     in_features: str,
@@ -3192,7 +3141,7 @@ def arcgis_pro_gp_multiple_ring_buffer(
 
 @mcp.tool(
     name="arcgis_pro_gp_feature_to_point",
-    description="management.FeatureToPoint：面/线转点（质心或内部点）。point_location 为 CENTROID 或 INSIDE。",
+    description="",
 )
 def arcgis_pro_gp_feature_to_point(
     in_features: str,
@@ -3208,7 +3157,7 @@ def arcgis_pro_gp_feature_to_point(
 
 @mcp.tool(
     name="arcgis_pro_gp_feature_to_line",
-    description="management.FeatureToLine：面转线。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_feature_to_line(in_features: str, out_feature_class: str) -> str:
     arcpy = _arcpy()
@@ -3220,7 +3169,7 @@ def arcgis_pro_gp_feature_to_line(in_features: str, out_feature_class: str) -> s
 
 @mcp.tool(
     name="arcgis_pro_gp_points_to_line",
-    description="management.PointsToLine：点转线。可选 line_field（分组）和 sort_field（排序）。",
+    description="",
 )
 def arcgis_pro_gp_points_to_line(
     in_features: str,
@@ -3239,7 +3188,7 @@ def arcgis_pro_gp_points_to_line(
 
 @mcp.tool(
     name="arcgis_pro_gp_polygon_to_line",
-    description="management.PolygonToLine：多边形转线。",
+    description="",
 )
 def arcgis_pro_gp_polygon_to_line(
     in_features: str,
@@ -3255,10 +3204,7 @@ def arcgis_pro_gp_polygon_to_line(
 
 @mcp.tool(
     name="arcgis_pro_gp_minimum_bounding_geometry",
-    description=(
-        "management.MinimumBoundingGeometry：最小外接几何。"
-        "geometry_type 为 RECTANGLE_BY_AREA/RECTANGLE_BY_WIDTH/CONVEX_HULL/CIRCLE/ENVELOPE。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_minimum_bounding_geometry(
     in_features: str,
@@ -3277,7 +3223,7 @@ def arcgis_pro_gp_minimum_bounding_geometry(
 
 @mcp.tool(
     name="arcgis_pro_gp_convex_hull",
-    description="MinimumBoundingGeometry(CONVEX_HULL)：凸包计算。group_option 为 ALL/NONE/LIST。",
+    description="",
 )
 def arcgis_pro_gp_convex_hull(
     in_features: str,
@@ -3293,7 +3239,7 @@ def arcgis_pro_gp_convex_hull(
 
 @mcp.tool(
     name="arcgis_pro_gp_split_by_attributes",
-    description="analysis.SplitByAttributes：按属性分割要素到多个输出。",
+    description="",
 )
 def arcgis_pro_gp_split_by_attributes(
     in_table: str,
@@ -3309,7 +3255,7 @@ def arcgis_pro_gp_split_by_attributes(
 
 @mcp.tool(
     name="arcgis_pro_gp_identity",
-    description="analysis.Identity：标识叠加分析。输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_identity(
     in_features: str,
@@ -3325,7 +3271,7 @@ def arcgis_pro_gp_identity(
 
 @mcp.tool(
     name="arcgis_pro_gp_symmetrical_difference",
-    description="analysis.SymDiff：对称差分析。输出在 GP_OUTPUT_ROOT。",
+    description="",
 )
 def arcgis_pro_gp_symmetrical_difference(
     in_features: str,
@@ -3343,7 +3289,7 @@ def arcgis_pro_gp_symmetrical_difference(
 
 @mcp.tool(
     name="arcgis_pro_gp_count_overlapping_features",
-    description="analysis.CountOverlappingFeatures：计数重叠要素。",
+    description="",
 )
 def arcgis_pro_gp_count_overlapping_features(
     in_features: str,
@@ -3358,7 +3304,7 @@ def arcgis_pro_gp_count_overlapping_features(
 
 @mcp.tool(
     name="arcgis_pro_gp_repair_geometry",
-    description="management.RepairGeometry：修复要素类几何错误（原地修改）。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_repair_geometry(in_features: str) -> str:
     arcpy = _arcpy()
@@ -3368,7 +3314,7 @@ def arcgis_pro_gp_repair_geometry(in_features: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_check_geometry",
-    description="management.CheckGeometry：检查要素几何问题，输出问题报告表。",
+    description="",
 )
 def arcgis_pro_gp_check_geometry(in_features: str, out_table: str) -> str:
     arcpy = _arcpy()
@@ -3378,7 +3324,7 @@ def arcgis_pro_gp_check_geometry(in_features: str, out_table: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_eliminate",
-    description="management.EliminatePolygonPart：消除细碎面。selection_type 为 LENGTH 或 AREA。",
+    description="",
 )
 def arcgis_pro_gp_eliminate(
     in_features: str,
@@ -3394,7 +3340,7 @@ def arcgis_pro_gp_eliminate(
 
 @mcp.tool(
     name="arcgis_pro_gp_multipart_to_singlepart",
-    description="management.MultipartToSinglepart：多部分要素转单部分。",
+    description="",
 )
 def arcgis_pro_gp_multipart_to_singlepart(
     in_features: str,
@@ -3409,7 +3355,7 @@ def arcgis_pro_gp_multipart_to_singlepart(
 
 @mcp.tool(
     name="arcgis_pro_gp_aggregate_polygons",
-    description="cartography.AggregatePolygons：聚合面。aggregation_distance 如 \"100 Meters\"。",
+    description="",
 )
 def arcgis_pro_gp_aggregate_polygons(
     in_features: str,
@@ -3432,7 +3378,7 @@ def arcgis_pro_gp_aggregate_polygons(
 
 @mcp.tool(
     name="arcgis_pro_gp_slope",
-    description="ddd.Slope：计算坡度。output_measurement 为 DEGREE 或 PERCENT_RISE；z_factor 默认 1。",
+    description="",
 )
 def arcgis_pro_gp_slope(
     in_raster: str,
@@ -3447,7 +3393,7 @@ def arcgis_pro_gp_slope(
 
 @mcp.tool(
     name="arcgis_pro_gp_aspect",
-    description="ddd.Aspect：计算坡向。",
+    description="",
 )
 def arcgis_pro_gp_aspect(in_raster: str, out_raster: str) -> str:
     arcpy = _arcpy()
@@ -3457,7 +3403,7 @@ def arcgis_pro_gp_aspect(in_raster: str, out_raster: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_hillshade",
-    description="ddd.HillShade：山影分析。可选 azimuth（315）、altitude（45）、z_factor（1）。",
+    description="",
 )
 def arcgis_pro_gp_hillshade(
     in_raster: str,
@@ -3473,9 +3419,7 @@ def arcgis_pro_gp_hillshade(
 
 @mcp.tool(
     name="arcgis_pro_gp_reclassify",
-    description=(
-        "sa.Reclassify：栅格重分类。remap 格式如 \"0 10 1;10 20 2;20 30 3\"（RemapRange）。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_reclassify(
     in_raster: str,
@@ -3490,7 +3434,7 @@ def arcgis_pro_gp_reclassify(
 
 @mcp.tool(
     name="arcgis_pro_gp_extract_by_mask",
-    description="sa.ExtractByMask：按掩膜提取栅格。",
+    description="",
 )
 def arcgis_pro_gp_extract_by_mask(
     in_raster: str,
@@ -3504,7 +3448,7 @@ def arcgis_pro_gp_extract_by_mask(
 
 @mcp.tool(
     name="arcgis_pro_gp_extract_by_attributes",
-    description="sa.ExtractByAttributes：按属性提取栅格。where_clause 如 \"VALUE > 100\"。",
+    description="",
 )
 def arcgis_pro_gp_extract_by_attributes(
     in_raster: str,
@@ -3518,7 +3462,7 @@ def arcgis_pro_gp_extract_by_attributes(
 
 @mcp.tool(
     name="arcgis_pro_gp_zonal_statistics_as_table",
-    description="sa.ZonalStatisticsAsTable：分区统计转表。statistics_type 默认 ALL。",
+    description="",
 )
 def arcgis_pro_gp_zonal_statistics_as_table(
     in_zone_data: str,
@@ -3536,7 +3480,7 @@ def arcgis_pro_gp_zonal_statistics_as_table(
 
 @mcp.tool(
     name="arcgis_pro_gp_kernel_density",
-    description="sa.KernelDensity：核密度分析。population_field 为空则不加权。",
+    description="",
 )
 def arcgis_pro_gp_kernel_density(
     in_features: str,
@@ -3554,7 +3498,7 @@ def arcgis_pro_gp_kernel_density(
 
 @mcp.tool(
     name="arcgis_pro_gp_point_density",
-    description="sa.PointDensity：点密度分析。",
+    description="",
 )
 def arcgis_pro_gp_point_density(
     in_features: str,
@@ -3569,7 +3513,7 @@ def arcgis_pro_gp_point_density(
 
 @mcp.tool(
     name="arcgis_pro_gp_idw",
-    description="sa.Idw：反距离权重插值。z_field 为高程/值字段；power 默认 2。",
+    description="",
 )
 def arcgis_pro_gp_idw(
     in_point_features: str,
@@ -3585,7 +3529,7 @@ def arcgis_pro_gp_idw(
 
 @mcp.tool(
     name="arcgis_pro_gp_kriging",
-    description="sa.Kriging：克里金插值。z_field 为值字段。",
+    description="",
 )
 def arcgis_pro_gp_kriging(
     in_point_features: str,
@@ -3600,7 +3544,7 @@ def arcgis_pro_gp_kriging(
 
 @mcp.tool(
     name="arcgis_pro_gp_topo_to_raster",
-    description="ddd.TopoToRaster：地形转栅格插值。",
+    description="",
 )
 def arcgis_pro_gp_topo_to_raster(
     in_topo_features: str,
@@ -3614,7 +3558,7 @@ def arcgis_pro_gp_topo_to_raster(
 
 @mcp.tool(
     name="arcgis_pro_gp_raster_to_polygon",
-    description="conversion.RasterToPolygon：栅格转面。simplify 默认 True。",
+    description="",
 )
 def arcgis_pro_gp_raster_to_polygon(
     in_raster: str,
@@ -3630,7 +3574,7 @@ def arcgis_pro_gp_raster_to_polygon(
 
 @mcp.tool(
     name="arcgis_pro_gp_polygon_to_raster",
-    description="conversion.PolygonToRaster：面转栅格。须指定 value_field。",
+    description="",
 )
 def arcgis_pro_gp_polygon_to_raster(
     in_features: str,
@@ -3645,7 +3589,7 @@ def arcgis_pro_gp_polygon_to_raster(
 
 @mcp.tool(
     name="arcgis_pro_gp_feature_to_raster",
-    description="conversion.FeatureToRaster：要素转栅格。须指定 field。",
+    description="",
 )
 def arcgis_pro_gp_feature_to_raster(
     in_features: str,
@@ -3660,10 +3604,7 @@ def arcgis_pro_gp_feature_to_raster(
 
 @mcp.tool(
     name="arcgis_pro_gp_raster_calculator",
-    description=(
-        "ia.RasterCalculator：栅格计算器（Map Algebra 表达式）。"
-        "expression 如 '\"dem\" * 2 + 100'，引用栅格用双引号。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_raster_calculator(expression: str, out_raster: str) -> str:
     arcpy = _arcpy()
@@ -3673,7 +3614,7 @@ def arcgis_pro_gp_raster_calculator(expression: str, out_raster: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_mosaic_to_new_raster",
-    description="management.MosaicToNewRaster：多栅格镶嵌为新栅格。",
+    description="",
 )
 def arcgis_pro_gp_mosaic_to_new_raster(
     input_rasters: list[str],
@@ -3693,10 +3634,7 @@ def arcgis_pro_gp_mosaic_to_new_raster(
 
 @mcp.tool(
     name="arcgis_pro_gp_clip_raster",
-    description=(
-        "management.Clip（栅格裁剪）。可用 rectangle 或 in_template_dataset 定义裁剪范围；"
-        "clipping_geometry=true 则用模板几何裁剪。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_clip_raster(
     in_raster: str,
@@ -3714,10 +3652,7 @@ def arcgis_pro_gp_clip_raster(
 
 @mcp.tool(
     name="arcgis_pro_gp_resample",
-    description=(
-        "management.Resample：栅格重采样。cell_size 如 \"10 10\"；"
-        "resampling_type 为 NEAREST/BILINEAR/CUBIC/MAJORITY。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_resample(
     in_raster: str,
@@ -3732,7 +3667,7 @@ def arcgis_pro_gp_resample(
 
 @mcp.tool(
     name="arcgis_pro_gp_project_raster",
-    description="management.ProjectRaster：栅格投影变换。resampling_type 为 NEAREST/BILINEAR/CUBIC/MAJORITY。",
+    description="",
 )
 def arcgis_pro_gp_project_raster(
     in_raster: str,
@@ -3747,7 +3682,7 @@ def arcgis_pro_gp_project_raster(
 
 @mcp.tool(
     name="arcgis_pro_gp_nibble",
-    description="sa.Nibble：栅格填充（用周围有效值替换 NoData 区域）。",
+    description="",
 )
 def arcgis_pro_gp_nibble(
     in_raster: str,
@@ -3766,7 +3701,7 @@ def arcgis_pro_gp_nibble(
 
 @mcp.tool(
     name="arcgis_pro_set_unique_value_renderer",
-    description="设置图层唯一值符号化（UniqueValueRenderer）。fields 为字段名列表。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_unique_value_renderer(
     aprx_path: str,
@@ -3786,10 +3721,7 @@ def arcgis_pro_set_unique_value_renderer(
 
 @mcp.tool(
     name="arcgis_pro_set_graduated_colors_renderer",
-    description=(
-        "设置分级色彩符号化。classification_field 为分级字段；num_classes 默认 5；"
-        "classification_method 为 NaturalBreaks/EqualInterval/Quantile 等。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_set_graduated_colors_renderer(
     aprx_path: str,
@@ -3813,7 +3745,7 @@ def arcgis_pro_set_graduated_colors_renderer(
 
 @mcp.tool(
     name="arcgis_pro_set_graduated_symbols_renderer",
-    description="设置分级符号。classification_field 为分级字段；num_classes 默认 5。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_graduated_symbols_renderer(
     aprx_path: str,
@@ -3836,7 +3768,7 @@ def arcgis_pro_set_graduated_symbols_renderer(
 
 @mcp.tool(
     name="arcgis_pro_set_simple_renderer",
-    description="设置图层单一符号（SimpleRenderer）。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_simple_renderer(
     aprx_path: str,
@@ -3855,7 +3787,7 @@ def arcgis_pro_set_simple_renderer(
 
 @mcp.tool(
     name="arcgis_pro_set_heatmap_renderer",
-    description="设置热力图渲染（HeatMapRenderer）。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_heatmap_renderer(
     aprx_path: str,
@@ -3874,10 +3806,7 @@ def arcgis_pro_set_heatmap_renderer(
 
 @mcp.tool(
     name="arcgis_pro_update_label_expression",
-    description=(
-        "修改图层标注表达式。expression_engine 为 Arcade/Python/VBScript；"
-        "label_class_name 为空则更新所有标注类。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_update_label_expression(
     aprx_path: str,
@@ -3899,10 +3828,7 @@ def arcgis_pro_update_label_expression(
 
 @mcp.tool(
     name="arcgis_pro_set_label_font",
-    description=(
-        "设置图层标注字体。可指定 font_name、font_size、bold、italic。"
-        "label_class_name 为空则更新所有标注类。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_set_label_font(
     aprx_path: str,
@@ -3927,7 +3853,7 @@ def arcgis_pro_set_label_font(
 
 @mcp.tool(
     name="arcgis_pro_export_report_pdf",
-    description="将报表（Report）导出为 PDF。受 EXPORT_ROOT 约束。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_export_report_pdf(
     aprx_path: str,
@@ -3944,7 +3870,7 @@ def arcgis_pro_export_report_pdf(
 
 @mcp.tool(
     name="arcgis_pro_list_layout_map_frames",
-    description="列出布局中所有 MapFrame 的名称和关联地图名。只读。",
+    description="",
 )
 def arcgis_pro_list_layout_map_frames(
     aprx_path: str,
@@ -3967,10 +3893,7 @@ def arcgis_pro_list_layout_map_frames(
 
 @mcp.tool(
     name="arcgis_pro_set_layout_element_position",
-    description=(
-        "移动/调整布局元素的 elementPositionX/Y 和 elementWidth/Height。"
-        "至少提供一个属性。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_set_layout_element_position(
     aprx_path: str,
@@ -3992,7 +3915,7 @@ def arcgis_pro_set_layout_element_position(
             break
     if elm is None:
         names = [getattr(e, "name", "") for e in layout.listElements()]
-        raise RuntimeError(f"未找到元素 {en!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
     updated: dict[str, float] = {}
     if x is not None:
         elm.elementPositionX = float(x)
@@ -4013,7 +3936,7 @@ def arcgis_pro_set_layout_element_position(
 
 @mcp.tool(
     name="arcgis_pro_set_layout_element_visible",
-    description="显示/隐藏布局元素（element.visible）。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_set_layout_element_visible(
     aprx_path: str,
@@ -4032,17 +3955,14 @@ def arcgis_pro_set_layout_element_visible(
             break
     if elm is None:
         names = [getattr(e, "name", "") for e in layout.listElements()]
-        raise RuntimeError(f"未找到元素 {en!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
     elm.visible = bool(visible)
     return _json_dumps({"ok": True, "aprx_path": path, "element_name": en, "visible": bool(visible)})
 
 
 @mcp.tool(
     name="arcgis_pro_update_legend_items",
-    description=(
-        "更新图例显示内容：设置图例中各图层是否显示。"
-        "layer_visibility 为 {图层名: true/false} 字典。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_update_legend_items(
     aprx_path: str,
@@ -4060,7 +3980,7 @@ def arcgis_pro_update_legend_items(
             break
     if legend is None:
         names = [e.name for e in layout.listElements("LEGEND_ELEMENT")]
-        raise RuntimeError(f"未找到图例 {legend_name!r}，可选：{names}")
+        raise RuntimeError("Invalid arguments")
     items = legend.items
     updated_count = 0
     for item in items:
@@ -4078,10 +3998,7 @@ def arcgis_pro_update_legend_items(
 
 @mcp.tool(
     name="arcgis_pro_create_layout",
-    description=(
-        "创建新布局。page_width/page_height 单位为英寸（默认 11x8.5 即横向 Letter）。"
-        "须 ALLOW_WRITE；建议随后 save_project。"
-    ),
+    description="",
 )
 def arcgis_pro_create_layout(
     aprx_path: str,
@@ -4102,11 +4019,27 @@ def arcgis_pro_create_layout(
 
 
 @mcp.tool(
+    name="arcgis_pro_rename_layout",
+    description="",
+)
+def arcgis_pro_rename_layout(
+    aprx_path: str,
+    layout_name: str,
+    new_layout_name: str,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    layout = _get_layout(project, layout_name)
+    new_name = new_layout_name.strip()
+    if not new_name:
+        raise RuntimeError("new_layout_name cannot be empty")
+    layout.name = new_name
+    return _json_dumps({"ok": True, "aprx_path": path, "layout_name": layout_name, "new_layout_name": new_name})
+
+
+@mcp.tool(
     name="arcgis_pro_export_map_to_image",
-    description=(
-        "直接导出地图视图（MapView）为图片（不经布局）。"
-        "output_path 须以 .png/.jpg/.tif 结尾。受 EXPORT_ROOT 约束。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_export_map_to_image(
     aprx_path: str,
@@ -4132,7 +4065,7 @@ def arcgis_pro_export_map_to_image(
 
 @mcp.tool(
     name="arcgis_pro_get_layer_extent",
-    description="获取图层空间范围（BBOX）：XMin/YMin/XMax/YMax 及空间参考。只读。",
+    description="",
 )
 def arcgis_pro_get_layer_extent(
     aprx_path: str,
@@ -4151,9 +4084,7 @@ def arcgis_pro_get_layer_extent(
 
 @mcp.tool(
     name="arcgis_pro_zoom_to_layer",
-    description=(
-        "在布局地图框中缩放到指定图层范围。须指定 layout_name 和 mapframe_name。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_zoom_to_layer(
     aprx_path: str,
@@ -4173,7 +4104,7 @@ def arcgis_pro_zoom_to_layer(
             mf = elm
             break
     if mf is None:
-        raise RuntimeError(f"未找到地图框 {mapframe_name!r}")
+        raise RuntimeError("Invalid arguments")
     desc = arcpy.Describe(lyr)
     ext = desc.extent
     mf.setExtent(ext)
@@ -4184,9 +4115,7 @@ def arcgis_pro_zoom_to_layer(
 
 @mcp.tool(
     name="arcgis_pro_zoom_to_selection",
-    description=(
-        "在布局地图框中缩放到图层当前选择集范围。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_zoom_to_selection(
     aprx_path: str,
@@ -4206,7 +4135,7 @@ def arcgis_pro_zoom_to_selection(
             mf = elm
             break
     if mf is None:
-        raise RuntimeError(f"未找到地图框 {mapframe_name!r}")
+        raise RuntimeError("Invalid arguments")
     mf.zoomToAllLayers(True)
     return _json_dumps(
         {"ok": True, "aprx_path": path, "layer_name": layer_name, "mapframe_name": mapframe_name},
@@ -4215,7 +4144,7 @@ def arcgis_pro_zoom_to_selection(
 
 @mcp.tool(
     name="arcgis_pro_layer_add_field_alias",
-    description="设置图层数据源中的字段别名（通过 AlterField）。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_layer_add_field_alias(
     aprx_path: str,
@@ -4242,10 +4171,7 @@ def arcgis_pro_layer_add_field_alias(
 
 @mcp.tool(
     name="arcgis_pro_update_layer_cim",
-    description=(
-        "直接操作图层 CIM 定义（高级）。传入 JSON 片段更新 CIM 属性路径。"
-        "cim_path 如 \"renderer.symbol.color\"；value 为 JSON 值。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_update_layer_cim(
     aprx_path: str,
@@ -4280,7 +4206,7 @@ def arcgis_pro_update_layer_cim(
 
 @mcp.tool(
     name="arcgis_pro_list_layer_renderers",
-    description="获取图层当前渲染信息：渲染类型、字段、分类数等。只读。",
+    description="",
 )
 def arcgis_pro_list_layer_renderers(
     aprx_path: str,
@@ -4318,7 +4244,7 @@ def arcgis_pro_list_layer_renderers(
 
 @mcp.tool(
     name="arcgis_pro_list_broken_sources",
-    description="列出 .aprx 中所有断开数据源的图层。只读。",
+    description="",
 )
 def arcgis_pro_list_broken_sources(aprx_path: str) -> str:
     _, project, path = _open_project(aprx_path)
@@ -4342,10 +4268,7 @@ def arcgis_pro_list_broken_sources(aprx_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_repair_layer_source",
-    description=(
-        "修复断开数据源：对每个匹配的图层执行 replaceDataSource。"
-        "须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_repair_layer_source(
     aprx_path: str,
@@ -4374,10 +4297,7 @@ def arcgis_pro_repair_layer_source(
 
 @mcp.tool(
     name="arcgis_pro_create_db_connection",
-    description=(
-        "management.CreateDatabaseConnection：创建 .sde 数据库连接文件。"
-        "须 ALLOW_WRITE；输出在 GP_OUTPUT_ROOT。"
-    ),
+    description="",
 )
 def arcgis_pro_create_db_connection(
     out_folder_path: str,
@@ -4416,7 +4336,7 @@ def arcgis_pro_create_db_connection(
 
 @mcp.tool(
     name="arcgis_pro_list_sde_datasets",
-    description="列出 SDE 数据库连接中的要素类和表。只读。",
+    description="",
 )
 def arcgis_pro_list_sde_datasets(
     sde_connection_path: str,
@@ -4439,10 +4359,7 @@ def arcgis_pro_list_sde_datasets(
 
 @mcp.tool(
     name="arcgis_pro_add_basemap",
-    description=(
-        "向地图添加底图（addBasemap）。basemap_name 如 'Topographic'、'Imagery'、"
-        "'Streets'、'Dark Gray Canvas' 等。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_add_basemap(
     aprx_path: str,
@@ -4463,7 +4380,7 @@ def arcgis_pro_add_basemap(
 
 @mcp.tool(
     name="arcgis_pro_create_map",
-    description="在工程中新建地图。须 ALLOW_WRITE；建议随后 save_project。",
+    description="",
 )
 def arcgis_pro_create_map(
     aprx_path: str,
@@ -4482,7 +4399,7 @@ def arcgis_pro_create_map(
 
 @mcp.tool(
     name="arcgis_pro_remove_map",
-    description="从工程中删除指定地图（removeItem）。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_remove_map(aprx_path: str, map_name: str) -> str:
     require_allow_write()
@@ -4494,7 +4411,7 @@ def arcgis_pro_remove_map(aprx_path: str, map_name: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_duplicate_map",
-    description="复制地图（copyItem）。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_duplicate_map(
     aprx_path: str,
@@ -4515,11 +4432,27 @@ def arcgis_pro_duplicate_map(
 
 
 @mcp.tool(
+    name="arcgis_pro_rename_map",
+    description="",
+)
+def arcgis_pro_rename_map(
+    aprx_path: str,
+    map_name: str,
+    new_map_name: str,
+) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    map_obj = _get_map(project, map_name)
+    new_name = new_map_name.strip()
+    if not new_name:
+        raise RuntimeError("new_map_name cannot be empty")
+    map_obj.name = new_name
+    return _json_dumps({"ok": True, "aprx_path": path, "map_name": map_name, "new_map_name": new_name})
+
+
+@mcp.tool(
     name="arcgis_pro_map_pan_to_extent",
-    description=(
-        "在布局地图框中平移/缩放到指定范围。"
-        "坐标为 xmin/ymin/xmax/ymax；spatial_reference_wkid 为空则用当前地图框空间参考。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_map_pan_to_extent(
     aprx_path: str,
@@ -4540,7 +4473,7 @@ def arcgis_pro_map_pan_to_extent(
             mf = elm
             break
     if mf is None:
-        raise RuntimeError(f"未找到地图框 {mapframe_name!r}")
+        raise RuntimeError("Invalid arguments")
     ext = arcpy.Extent(float(xmin), float(ymin), float(xmax), float(ymax))
     if spatial_reference_wkid is not None:
         ext.spatialReference = arcpy.SpatialReference(int(spatial_reference_wkid))
@@ -4557,10 +4490,7 @@ def arcgis_pro_map_pan_to_extent(
 
 @mcp.tool(
     name="arcgis_pro_set_time_slider",
-    description=(
-        "设置地图时间属性。start_time/end_time 为 ISO 格式时间字符串。"
-        "time_field 为时间字段名。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_set_time_slider(
     aprx_path: str,
@@ -4600,10 +4530,7 @@ def arcgis_pro_set_time_slider(
 
 @mcp.tool(
     name="arcgis_pro_gp_run_tool",
-    description=(
-        "通用 GP 执行引擎：tool_name 格式为 'module.Tool'（如 analysis.Buffer）；"
-        "parameters 为参数字典。须 ALLOW_WRITE。使用前建议先用 gp_list_tools_in_toolbox 查找工具。"
-    ),
+    description="",
 )
 def arcgis_pro_gp_run_tool(
     tool_name: str,
@@ -4616,7 +4543,7 @@ def arcgis_pro_gp_run_tool(
 
 @mcp.tool(
     name="arcgis_pro_gp_get_messages",
-    description="获取上一次 GP 执行的消息/警告/错误。只读。",
+    description="",
 )
 def arcgis_pro_gp_get_messages() -> str:
     arcpy = _arcpy()
@@ -4626,7 +4553,7 @@ def arcgis_pro_gp_get_messages() -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_list_toolboxes",
-    description="列出所有可用工具箱。只读。",
+    description="",
 )
 def arcgis_pro_gp_list_toolboxes() -> str:
     arcpy = _arcpy()
@@ -4636,7 +4563,7 @@ def arcgis_pro_gp_list_toolboxes() -> str:
 
 @mcp.tool(
     name="arcgis_pro_gp_list_tools_in_toolbox",
-    description="列出指定工具箱中的工具名称。toolbox 为工具箱别名（如 analysis、management）。只读。",
+    description="",
 )
 def arcgis_pro_gp_list_tools_in_toolbox(toolbox: str) -> str:
     arcpy = _arcpy()
@@ -4651,7 +4578,7 @@ def arcgis_pro_gp_list_tools_in_toolbox(toolbox: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_na_create_route_layer",
-    description="na.MakeRouteAnalysisLayer：创建路径分析图层。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_na_create_route_layer(
     network_data_source: str,
@@ -4667,10 +4594,7 @@ def arcgis_pro_na_create_route_layer(
 
 @mcp.tool(
     name="arcgis_pro_na_add_locations",
-    description=(
-        "na.AddLocations：添加网络分析输入点。sub_layer 如 Stops、Facilities、Barriers。"
-        "须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_na_add_locations(
     in_network_analysis_layer: str,
@@ -4687,7 +4611,7 @@ def arcgis_pro_na_add_locations(
 
 @mcp.tool(
     name="arcgis_pro_na_solve",
-    description="na.Solve：求解网络分析。ignore_invalids 默认 True（跳过无效位置）。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_na_solve(
     in_network_analysis_layer: str,
@@ -4700,7 +4624,7 @@ def arcgis_pro_na_solve(
 
 @mcp.tool(
     name="arcgis_pro_na_service_area",
-    description="na.MakeServiceAreaAnalysisLayer：创建服务区分析图层。可选 cutoffs 列表。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_na_service_area(
     network_data_source: str,
@@ -4717,10 +4641,7 @@ def arcgis_pro_na_service_area(
 
 @mcp.tool(
     name="arcgis_pro_na_od_matrix",
-    description=(
-        "na.MakeODCostMatrixAnalysisLayer：创建 OD 成本矩阵分析图层。"
-        "可选 cutoff 和 number_of_destinations_to_find。须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_na_od_matrix(
     network_data_source: str,
@@ -4743,7 +4664,7 @@ def arcgis_pro_na_od_matrix(
 
 @mcp.tool(
     name="arcgis_pro_get_metadata",
-    description="读取数据集元数据：标题、标签、摘要、描述等。只读。",
+    description="",
 )
 def arcgis_pro_get_metadata(dataset_path: str) -> str:
     arcpy = _arcpy()
@@ -4753,10 +4674,7 @@ def arcgis_pro_get_metadata(dataset_path: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_set_metadata",
-    description=(
-        "写入/更新数据集元数据：title、tags、summary、description、credits、access_constraints。"
-        "须 ALLOW_WRITE。"
-    ),
+    description="",
 )
 def arcgis_pro_set_metadata(
     dataset_path: str,
@@ -4774,7 +4692,7 @@ def arcgis_pro_set_metadata(
 
 @mcp.tool(
     name="arcgis_pro_gp_validate_topology",
-    description="management.ValidateTopology：验证拓扑。须 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_validate_topology(in_topology: str) -> str:
     arcpy = _arcpy()
@@ -4784,7 +4702,7 @@ def arcgis_pro_gp_validate_topology(in_topology: str) -> str:
 
 @mcp.tool(
     name="arcgis_pro_workspace_list_datasets",
-    description="在工作空间中列出数据集（ListDatasets）。可用 dataset_type 过滤，路径受 INPUT_ROOTS 约束（若设置）。",
+    description="",
 )
 def arcgis_pro_workspace_list_datasets(
     workspace_path: str,
@@ -4806,7 +4724,7 @@ def arcgis_pro_workspace_list_datasets(
 
 @mcp.tool(
     name="arcgis_pro_workspace_list_feature_datasets",
-    description="在工作空间中列出要素数据集（ListDatasets(feature_type='Feature')）。只读。",
+    description="",
 )
 def arcgis_pro_workspace_list_feature_datasets(
     workspace_path: str,
@@ -4821,7 +4739,7 @@ def arcgis_pro_workspace_list_feature_datasets(
 
 @mcp.tool(
     name="arcgis_pro_workspace_list_domains",
-    description="列出工作空间中的域（ListDomains）。只读。",
+    description="",
 )
 def arcgis_pro_workspace_list_domains(
     workspace_path: str,
@@ -4835,7 +4753,7 @@ def arcgis_pro_workspace_list_domains(
 
 @mcp.tool(
     name="arcgis_pro_gp_table_to_table",
-    description="conversion.TableToTable: 将输入表或 CSV 导出到 GDB 表。需 ALLOW_WRITE。",
+    description="",
 )
 def arcgis_pro_gp_table_to_table(
     in_rows: str,
