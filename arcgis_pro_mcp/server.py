@@ -26,10 +26,13 @@ from arcgis_pro_mcp import (
     workspace_listing,
 )
 from arcgis_pro_mcp.paths import (
+    inline_db_password_allowed,
     normalize_path,
+    project_roots,
     require_allow_write,
     validate_input_path_optional,
     validate_output_in_export_root,
+    validate_project_path,
     writes_allowed,
 )
 
@@ -64,11 +67,20 @@ def _arcpy():
 
 def _open_project(aprx_path: str) -> tuple[Any, Any, str]:
     arcpy = _arcpy()
-    path = aprx_path.strip().strip('"')
-    if not path:
-        raise RuntimeError("aprx_path 不能为空")
-    project = arcpy.mp.ArcGISProject(path)
+    path = validate_project_path(aprx_path, "aprx_path")
+    try:
+        project = arcpy.mp.ArcGISProject(path)
+    except Exception as ex:  # noqa: BLE001
+        raise RuntimeError(f"打开工程失败：{path}；{str(ex)[:500]}") from ex
     return arcpy, project, path
+
+
+def _raise_not_found(label: str, value: str, available: list[str]) -> None:
+    preview = ", ".join(available[:20])
+    if len(available) > 20:
+        preview += ", ..."
+    suffix = f"；可选值：{preview}" if preview else ""
+    raise RuntimeError(f"未找到 {label}：{value!r}{suffix}")
 
 
 def _get_map(project: Any, map_name: str) -> Any:
@@ -76,7 +88,7 @@ def _get_map(project: Any, map_name: str) -> Any:
         if m.name == map_name:
             return m
     available = [m.name for m in project.listMaps()]
-    raise RuntimeError("Invalid arguments")
+    _raise_not_found("map", map_name, available)
 
 
 def _get_layout(project: Any, layout_name: str) -> Any:
@@ -84,7 +96,7 @@ def _get_layout(project: Any, layout_name: str) -> Any:
         if lyt.name == layout_name:
             return lyt
     available = [lyt.name for lyt in project.listLayouts()]
-    raise RuntimeError("Invalid arguments")
+    _raise_not_found("layout", layout_name, available)
 
 
 def _find_layer(map_obj: Any, layer_name: str) -> Any:
@@ -92,7 +104,7 @@ def _find_layer(map_obj: Any, layer_name: str) -> Any:
         if lyr.name == layer_name:
             return lyr
     names = [x.name for x in map_obj.listLayers()]
-    raise RuntimeError("Invalid arguments")
+    _raise_not_found("layer", layer_name, names)
 
 
 @contextmanager
@@ -108,7 +120,7 @@ def _workspace_ctx(arcpy: Any, workspace_path: str):
 def _sanitize_wild_card(wild_card: str, max_len: int = 120) -> str:
     wc = wild_card.strip()
     if len(wc) > max_len:
-        raise RuntimeError("wild_card 杩囬暱")
+        raise RuntimeError("wild_card 过长")
     return wc or "*"
 
 
@@ -173,9 +185,9 @@ def _sanitize_order_by(order_by: str) -> str:
     if not ob:
         return ""
     if len(ob) > _MAX_QUERY_WHERE:
-        raise RuntimeError("order_by 杩囬暱")
+        raise RuntimeError("order_by 过长")
     if any(ch in ob for ch in ("\r", "\n", ";")):
-        raise RuntimeError("order_by 涓嶈兘鍖呭惈鎹㈣鎴?鍒嗗彿")
+        raise RuntimeError("order_by 不能包含换行或分号")
     return ob
 
 def _validate_view_name(name: str, label: str) -> str:
@@ -201,18 +213,18 @@ def _query_rows(
 ) -> list[dict[str, Any]]:
     w = (where_clause or "").strip()
     if len(w) > _MAX_QUERY_WHERE:
-        raise RuntimeError("where_clause 杩囬暱")
+        raise RuntimeError("where_clause 过长")
     cap = max(1, min(int(max_rows), 500))
     start = max(0, min(int(offset), 1_000_000))
     fnames = [f.strip() for f in fields if f.strip()]
     if not fnames:
-        raise RuntimeError("fields 涓嶈兘涓虹┖")
+        raise RuntimeError("fields 不能为空")
     if any(f.upper().startswith("SHAPE@") for f in fnames):
-        raise RuntimeError("fields 涓嶄笉鑳藉寘鍚?SHAPE@*锛岃浣跨敤 include_shape_wkt")
+        raise RuntimeError("fields 不能包含 SHAPE@*，请使用 include_shape_wkt")
     valid = {f.name for f in arcpy.ListFields(dataset_path)}
     missing = [f for f in fnames if f not in valid]
     if missing:
-        raise RuntimeError("Invalid arguments")
+        _raise_not_found("field", ", ".join(missing), sorted(valid))
     cursor_fields = list(fnames)
     if include_shape_wkt:
         cursor_fields.append("SHAPE@WKT")
@@ -338,6 +350,10 @@ def arcgis_pro_environment_info() -> str:
         info["product_info"] = arcpy.ProductInfo()
     except Exception as ex:  # noqa: BLE001
         info["product_info_error"] = str(ex)[:500]
+    info["allow_write"] = writes_allowed()
+    info["project_roots_configured"] = bool(project_roots())
+    info["generic_gp_enabled"] = gp_generic.generic_gp_enabled()
+    info["generic_gp_allowlist"] = gp_generic.generic_gp_allowlist()
     return _json_dumps(info)
 
 
@@ -350,6 +366,7 @@ def arcgis_pro_server_capabilities() -> str:
     tools_read = [
         "arcgis_pro_environment_info",
         "arcgis_pro_server_capabilities",
+        "arcgis_pro_list_projects",
         "arcgis_pro_describe",
         "arcgis_pro_list_fields",
         "arcgis_pro_project_connections",
@@ -517,6 +534,7 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_set_layout_element_visible",
         "arcgis_pro_update_legend_items",
         "arcgis_pro_create_layout",
+        "arcgis_pro_remove_layout",
         "arcgis_pro_zoom_to_layer",
         "arcgis_pro_zoom_to_selection",
         "arcgis_pro_layer_add_field_alias",
@@ -557,6 +575,9 @@ def arcgis_pro_server_capabilities() -> str:
             "input_roots_configured": bool(
                 os.environ.get("ARCGIS_PRO_MCP_INPUT_ROOTS", "").strip(),
             ),
+            "project_roots_configured": bool(project_roots()),
+            "generic_gp_enabled": gp_generic.generic_gp_enabled(),
+            "generic_gp_allowlist": gp_generic.generic_gp_allowlist(),
             "tools_read_only": tools_read,
             "tools_require_allow_write": tools_write,
             "tools_export": tools_export,
@@ -566,6 +587,30 @@ def arcgis_pro_server_capabilities() -> str:
             ),
         },
     )
+
+
+@mcp.tool(
+    name="arcgis_pro_list_projects",
+    description="",
+)
+def arcgis_pro_list_projects(max_items: int = 100) -> str:
+    roots = project_roots()
+    if not roots:
+        raise RuntimeError(
+            "未配置工程根目录。请设置 ARCGIS_PRO_MCP_PROJECT_ROOTS，"
+            "或退回使用 ARCGIS_PRO_MCP_INPUT_ROOTS。"
+        )
+    cap = max(1, min(int(max_items), 1000))
+    projects: list[str] = []
+    for root in roots:
+        for dirpath, _, filenames in os.walk(root):
+            for filename in filenames:
+                if not filename.lower().endswith(".aprx"):
+                    continue
+                projects.append(normalize_path(os.path.join(dirpath, filename)))
+                if len(projects) >= cap:
+                    return _json_dumps({"roots": roots, "project_count": len(projects), "projects": projects})
+    return _json_dumps({"roots": roots, "project_count": len(projects), "projects": projects})
 
 
 @mcp.tool(
@@ -614,9 +659,7 @@ def arcgis_pro_list_reports(aprx_path: str) -> str:
 )
 def arcgis_pro_describe(dataset_path: str) -> str:
     arcpy = _arcpy()
-    p = dataset_path.strip().strip('"')
-    if not p:
-        raise RuntimeError("dataset_path 不能为空")
+    p = validate_input_path_optional(dataset_path, "dataset_path")
     try:
         summary = _describe_summary(arcpy, p)
     except Exception as ex:  # noqa: BLE001
@@ -630,9 +673,7 @@ def arcgis_pro_describe(dataset_path: str) -> str:
 )
 def arcgis_pro_list_fields(dataset_path: str) -> str:
     arcpy = _arcpy()
-    p = dataset_path.strip().strip('"')
-    if not p:
-        raise RuntimeError("dataset_path 不能为空")
+    p = validate_input_path_optional(dataset_path, "dataset_path")
     rows: list[dict[str, Any]] = []
     try:
         for f in arcpy.ListFields(p):
@@ -1366,7 +1407,7 @@ def arcgis_pro_mapframe_zoom_to_bookmark(
             break
     if mf is None:
         names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
-        raise RuntimeError("Invalid arguments")
+        _raise_not_found("mapframe", mapframe_name, names)
     bkmk = None
     try:
         for b in mf.map.listBookmarks():
@@ -1374,10 +1415,10 @@ def arcgis_pro_mapframe_zoom_to_bookmark(
                 bkmk = b
                 break
     except Exception as ex:  # noqa: BLE001
-        raise RuntimeError("Invalid arguments") from e
+        raise RuntimeError(f"读取书签失败：{str(ex)[:500]}") from ex
     if bkmk is None:
         names = [b.name for b in mf.map.listBookmarks()]
-        raise RuntimeError("Invalid arguments")
+        _raise_not_found("bookmark", bookmark_name, names)
     mf.zoomToBookmark(bkmk)  # type: ignore[attr-defined]
     return _json_dumps(
         {
@@ -1462,7 +1503,7 @@ def arcgis_pro_remove_table(aprx_path: str, map_name: str, table_name: str) -> s
             break
     if target is None:
         names = [tbl.name for tbl in m.listTables()]  # type: ignore[attr-defined]
-        raise RuntimeError("Invalid arguments")
+        _raise_not_found("table", table_name, names)
     if hasattr(m, "removeTable"):
         m.removeTable(target)  # type: ignore[attr-defined]
     elif hasattr(m, "removeItem"):
@@ -1620,15 +1661,8 @@ def arcgis_pro_da_query_rows(
 ) -> str:
     arcpy = _arcpy()
     p = validate_input_path_optional(dataset_path, "dataset_path")
-    rows = _query_rows(
-        arcpy,
-        p,
-        fields,
-        where_clause,
-        order_by,
-        max_rows,
-        offset,
-        include_shape_wkt,
+    rows = da_read.query_rows(
+        arcpy, p, fields, where_clause, order_by, max_rows, offset, include_shape_wkt
     )
     return _json_dumps(
         {
@@ -2108,7 +2142,7 @@ def arcgis_pro_remove_join(
     join_name: str = "",
 ) -> str:
     require_allow_write()
-    _, project, path = _open_project(aprx_path)
+    arcpy, project, path = _open_project(aprx_path)
     m = _get_map(project, map_name)
     lyr = _find_layer(m, layer_name)
     jn = join_name.strip()
@@ -4038,6 +4072,18 @@ def arcgis_pro_rename_layout(
 
 
 @mcp.tool(
+    name="arcgis_pro_remove_layout",
+    description="",
+)
+def arcgis_pro_remove_layout(aprx_path: str, layout_name: str) -> str:
+    require_allow_write()
+    _, project, path = _open_project(aprx_path)
+    layout = _get_layout(project, layout_name)
+    project.removeItem(layout)
+    return _json_dumps({"ok": True, "aprx_path": path, "removed": layout_name})
+
+
+@mcp.tool(
     name="arcgis_pro_export_map_to_image",
     description="",
 )
@@ -4308,6 +4354,8 @@ def arcgis_pro_create_db_connection(
     authentication: str = "DATABASE_AUTH",
     username: str = "",
     password: str = "",
+    username_env_var: str = "",
+    password_env_var: str = "",
 ) -> str:
     require_allow_write()
     arcpy = _arcpy()
@@ -4327,11 +4375,43 @@ def arcgis_pro_create_db_connection(
         kwargs["database"] = database.strip()
     auth = authentication.strip().upper()
     kwargs["account_authentication"] = auth
+    user = username
+    pwd = password
+    uev = username_env_var.strip()
+    pev = password_env_var.strip()
+    if user and uev:
+        raise RuntimeError("username 与 username_env_var 只能二选一")
+    if pwd and pev:
+        raise RuntimeError("password 与 password_env_var 只能二选一")
+    if uev:
+        user = os.environ.get(uev, "").strip()
+        if not user:
+            raise RuntimeError(f"环境变量 {uev!r} 未设置或为空")
+    if pev:
+        pwd = os.environ.get(pev, "")
+        if not pwd:
+            raise RuntimeError(f"环境变量 {pev!r} 未设置或为空")
     if auth == "DATABASE_AUTH":
-        kwargs["username"] = username
-        kwargs["password"] = password
+        if not user:
+            raise RuntimeError("DATABASE_AUTH 需要 username 或 username_env_var")
+        if password and not inline_db_password_allowed():
+            raise RuntimeError(
+                "默认不允许通过 MCP 直接传入数据库密码。请改用 password_env_var，"
+                "或在受控环境下设置 ARCGIS_PRO_MCP_ALLOW_INLINE_DB_PASSWORD=1。"
+            )
+        if not pwd:
+            raise RuntimeError("DATABASE_AUTH 需要 password_env_var，或显式允许内联 password")
+        kwargs["username"] = user
+        kwargs["password"] = pwd
     arcpy.management.CreateDatabaseConnection(ofp, on, **kwargs)
-    return _json_dumps({"ok": True, "connection_file": f"{ofp}\\{on}"})
+    return _json_dumps(
+        {
+            "ok": True,
+            "connection_file": f"{ofp}\\{on}",
+            "username_source": "env" if uev else ("inline" if user else ""),
+            "password_source": "env" if pev else ("inline" if pwd else ""),
+        },
+    )
 
 
 @mcp.tool(

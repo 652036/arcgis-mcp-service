@@ -17,11 +17,7 @@ jobs:
         run: pip install -e .
       - name: Syntax check
         run: |
-          python -m py_compile arcgis_pro_mcp/server.py
-          python -m py_compile arcgis_pro_mcp/paths.py
-          python -m py_compile arcgis_pro_mcp/gp_allowlist.py
-          python -m py_compile arcgis_pro_mcp/workspace_listing.py
-          python -m py_compile arcgis_pro_mcp/da_read.py
-          python -m py_compile arcgis_pro_mcp/gp_write.py
-          python -m py_compile arcgis_pro_mcp/gp_schema.py
-          python -m py_compile arcgis_pro_mcp/da_write.py
+          python -m compileall arcgis_pro_mcp
+      - name: Unit tests
+        run: |
+          python -m unittest discover -s tests -p "test_*.py"

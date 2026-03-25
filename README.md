@@ -11,10 +11,10 @@
 - 读取 `.aprx` 中的地图、布局、图层、书签、表和工程连接信息
 - 导出布局 PDF、布局图片、地图图片、报表 PDF
 - 控制图层可见性、透明度、定义查询、选择集、标签、部分符号化
-- 执行白名单 GP 工具，或通过通用 GP 入口运行已知工具箱工具
+- 执行白名单 GP 工具，或在服务端显式开启并 allowlist 后，通过通用 GP 入口运行少量已知工具箱工具
 - 对表或要素类进行只读抽样、去重值扫描、条件查询
 - 创建临时 feature layer / table view 供后续会话内工具链继续使用
-- 创建、重命名、删除部分工程对象，如 map、layout、group layer、standalone table
+- 创建、重命名、删除部分工程对象，如 map、layout、group layer；standalone table 目前支持添加与移除
 
 ## 不在当前范围内
 
@@ -56,6 +56,10 @@ python -m arcgis_pro_mcp
 | `ARCGIS_PRO_MCP_EXPORT_ROOT` | 如果设置，所有导出文件和 `saveACopy` 输出路径必须落在该目录下。 |
 | `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` | 写入型 GP 的输出根目录。很多 GP 输出要素类、表、栅格前都要求设置它。 |
 | `ARCGIS_PRO_MCP_INPUT_ROOTS` | 可选输入根目录列表，多个路径使用 Windows 的 `;` 分隔。若设置，很多输入路径都必须位于这些根目录之一。 |
+| `ARCGIS_PRO_MCP_PROJECT_ROOTS` | 可选工程根目录列表。若设置，`.aprx` 只能位于这些目录下；若未设置，则回退使用 `ARCGIS_PRO_MCP_INPUT_ROOTS`。 |
+| `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP` | 设置为 `1` 后才允许使用 `arcgis_pro_gp_run_tool`。 |
+| `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` | 通用 GP 精确 allowlist，多个工具名可用逗号或分号分隔，如 `management.CopyFeatures,analysis.Buffer`。 |
+| `ARCGIS_PRO_MCP_ALLOW_INLINE_DB_PASSWORD` | 默认禁止在 MCP 参数中直接传数据库密码；仅在受控环境下显式设置后才允许。 |
 
 ### 设计原则
 
@@ -64,6 +68,8 @@ python -m arcgis_pro_mcp
 - 导出路径可限制到固定目录
 - GP 输出可限制到固定目录
 - 输入路径可限制到固定目录集合
+- 工程路径可限制到固定目录集合
+- 通用 GP 必须显式开启并 allowlist
 
 ## 启动后先做什么
 
@@ -78,6 +84,8 @@ python -m arcgis_pro_mcp
 - 是否允许写入
 - 导出根目录是否配置
 - GP 输出根目录是否配置
+- 工程根目录是否配置
+- 通用 GP 是否开启及 allowlist
 - 当前服务暴露了哪些工具类别
 
 ## 工具概览
@@ -88,6 +96,7 @@ python -m arcgis_pro_mcp
 
 - `arcgis_pro_environment_info`
 - `arcgis_pro_server_capabilities`
+- `arcgis_pro_list_projects`
 
 ### 2. 工程、地图、图层、布局只读
 
@@ -175,6 +184,7 @@ python -m arcgis_pro_mcp
 - `arcgis_pro_map_pan_to_extent`
 - `arcgis_pro_create_layout`
 - `arcgis_pro_rename_layout`
+- `arcgis_pro_remove_layout`
 - `arcgis_pro_set_layout_element_position`
 - `arcgis_pro_set_layout_element_visible`
 - `arcgis_pro_update_legend_items`
@@ -267,6 +277,13 @@ python -m arcgis_pro_mcp
 - `arcgis_pro_gp_list_toolboxes`
 - `arcgis_pro_gp_list_tools_in_toolbox`
 
+注意：
+
+- `arcgis_pro_gp_run_tool` 默认禁用
+- 必须同时设置 `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP=1`
+- 且将具体工具名加入 `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST`
+- 路径型参数仍会按输入根目录和 GP 输出根目录策略校验
+
 网络分析：
 
 - `arcgis_pro_na_create_route_layer`
@@ -281,11 +298,12 @@ python -m arcgis_pro_mcp
 
 1. `arcgis_pro_environment_info`
 2. `arcgis_pro_server_capabilities`
-3. `arcgis_pro_project_summary`
-4. `arcgis_pro_list_maps`
-5. `arcgis_pro_list_layers`
-6. `arcgis_pro_describe` / `arcgis_pro_list_fields`
-7. `arcgis_pro_da_query_rows`
+3. `arcgis_pro_list_projects`
+4. `arcgis_pro_project_summary`
+5. `arcgis_pro_list_maps`
+6. `arcgis_pro_list_layers`
+7. `arcgis_pro_describe` / `arcgis_pro_list_fields`
+8. `arcgis_pro_da_query_rows`
 
 ### 安全写入
 
@@ -315,7 +333,9 @@ python -m arcgis_pro_mcp
         "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
         "ARCGIS_PRO_MCP_EXPORT_ROOT": "C:\\ArcGISMCP_Outputs",
         "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": "C:\\ArcGISMCP_GP",
-        "ARCGIS_PRO_MCP_INPUT_ROOTS": "C:\\GIS_Data;D:\\EnterpriseGDB"
+        "ARCGIS_PRO_MCP_INPUT_ROOTS": "C:\\GIS_Data;D:\\EnterpriseGDB",
+        "ARCGIS_PRO_MCP_PROJECT_ROOTS": "C:\\GIS_Projects",
+        "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "0"
       }
     }
   }
@@ -333,7 +353,8 @@ python -m arcgis_pro_mcp
 
 ```bash
 pip install -e .
-python -m py_compile arcgis_pro_mcp\\*.py
+python -m compileall arcgis_pro_mcp
+python -m unittest discover -s tests -p "test_*.py"
 ```
 
-项目 CI 目前以基础安装和 `py_compile` 为主，不会在无 ArcGIS Pro 的环境中真正加载 `arcpy`。
+项目 CI 目前会做基础安装、整包语法编译和无 `arcpy` 依赖的单元测试，但仍不会在无 ArcGIS Pro 的环境中真正加载 `arcpy`。

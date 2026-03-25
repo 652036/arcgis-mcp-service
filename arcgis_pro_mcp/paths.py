@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
+
+_PROJECT_ROOT_ENV = "ARCGIS_PRO_MCP_PROJECT_ROOTS"
+_INPUT_ROOT_ENV = "ARCGIS_PRO_MCP_INPUT_ROOTS"
+_INLINE_DB_PASSWORD_ENV = "ARCGIS_PRO_MCP_ALLOW_INLINE_DB_PASSWORD"
+_ABS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def normalize_path(p: str) -> str:
@@ -22,6 +28,55 @@ def path_under_root(path: str, root: str) -> bool:
     sep = os.sep
     prefix = root_real.rstrip(sep) + sep
     return path_real == root_real or path_real.lower().startswith(prefix.lower())
+
+
+def is_probably_path(value: str) -> bool:
+    s = (value or "").strip().strip('"')
+    if not s or s in {"#", "CURRENT", "in_memory", "memory"}:
+        return False
+    if os.path.isabs(s) or _ABS_DRIVE_RE.match(s):
+        return True
+    if any(sep in s for sep in (os.sep, "/", "\\")):
+        return True
+    lower = s.lower()
+    return lower.endswith(
+        (
+            ".aprx",
+            ".gdb",
+            ".sde",
+            ".shp",
+            ".dbf",
+            ".tif",
+            ".tiff",
+            ".img",
+            ".lyrx",
+            ".csv",
+            ".xlsx",
+            ".xls",
+            ".json",
+            ".geojson",
+            ".kml",
+            ".kmz",
+            ".pdf",
+            ".png",
+            ".jpg",
+            ".jpeg",
+        ),
+    )
+
+
+def _roots_from_env(var_name: str) -> list[str]:
+    raw = os.environ.get(var_name, "").strip()
+    if not raw:
+        return []
+    return [x.strip().strip('"') for x in raw.split(os.pathsep) if x.strip()]
+
+
+def project_roots() -> list[str]:
+    roots = _roots_from_env(_PROJECT_ROOT_ENV)
+    if roots:
+        return roots
+    return _roots_from_env(_INPUT_ROOT_ENV)
 
 
 def validate_output_in_export_root(output_path: str, label: str) -> str:
@@ -65,13 +120,25 @@ def validate_input_path_optional(input_path: str, label: str) -> str:
     """If ARCGIS_PRO_MCP_INPUT_ROOTS is set (os.pathsep-separated), restrict inputs."""
     p = normalize_path(input_path)
     require_absolute(p, label)
-    raw = os.environ.get("ARCGIS_PRO_MCP_INPUT_ROOTS", "").strip()
-    if not raw:
+    roots = _roots_from_env(_INPUT_ROOT_ENV)
+    if not roots:
         return p
-    roots = [x.strip().strip('"') for x in raw.split(os.pathsep) if x.strip()]
     if not any(path_under_root(p, r) for r in roots):
         raise RuntimeError(
-            f"{label} 必须位于 ARCGIS_PRO_MCP_INPUT_ROOTS 中的某一目录下（使用 {os.pathsep!r} 分隔多个根路径）"
+            f"{label} 必须位于 {_INPUT_ROOT_ENV} 中的某一目录下（使用 {os.pathsep!r} 分隔多个根路径）"
+        )
+    return p
+
+
+def validate_project_path(project_path: str, label: str = "aprx_path") -> str:
+    """Validate ArcGIS Pro project paths under PROJECT_ROOTS or INPUT_ROOTS."""
+    p = normalize_path(project_path)
+    require_absolute(p, label)
+    roots = project_roots()
+    if roots and not any(path_under_root(p, r) for r in roots):
+        source_env = _PROJECT_ROOT_ENV if _roots_from_env(_PROJECT_ROOT_ENV) else _INPUT_ROOT_ENV
+        raise RuntimeError(
+            f"{label} 必须位于 {source_env} 中的某一目录下（使用 {os.pathsep!r} 分隔多个根路径）"
         )
     return p
 
@@ -87,3 +154,8 @@ def require_allow_write() -> None:
             "写入类操作已禁用。设置 ARCGIS_PRO_MCP_ALLOW_WRITE=1 以启用：保存工程、修改图层、"
             "按属性/位置选择、地图框缩放到书签、添加/移除图层、写入型 GP、Join 与布局文本等。"
         )
+
+
+def inline_db_password_allowed() -> bool:
+    v = os.environ.get(_INLINE_DB_PASSWORD_ENV, "").strip().lower()
+    return v in ("1", "true", "yes", "on")

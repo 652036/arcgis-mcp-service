@@ -82,32 +82,34 @@ def query_rows(
     include_shape_wkt: bool = False,
 ) -> list[dict[str, Any]]:
     if not fields:
-        raise RuntimeError("fields 涓嶈兘涓虹┖锛屼笖涓嶅厑璁镐娇鐢?*")
+        raise RuntimeError("fields 不能为空，且不允许使用 *")
     w = (where_clause or "").strip()
     if len(w) > _MAX_WHERE:
-        raise RuntimeError("where_clause 杩囬暱")
+        raise RuntimeError("where_clause 过长")
     ob = (order_by or "").strip()
     if len(ob) > _MAX_ORDER_BY:
-        raise RuntimeError("order_by 杩囬暱")
+        raise RuntimeError("order_by 过长")
+    if any(ch in ob for ch in ("\r", "\n", ";")):
+        raise RuntimeError("order_by 不能包含换行或分号")
     cap = max(1, min(int(max_rows), 1000))
     skip = max(0, min(int(offset), 1_000_000))
     fnames = [f.strip() for f in fields if f.strip()]
     if not fnames:
-        raise RuntimeError("fields 鏃犳晥")
+        raise RuntimeError("fields 无效")
     for f in fnames:
         if f.upper().startswith("SHAPE@"):
-            raise RuntimeError("鍑犱綍璇蜂娇鐢ㄥ弬鏁?include_shape_wkt=true锛屽嬁鍦?fields 涓紶鍏?SHAPE@*")
+            raise RuntimeError("几何请使用参数 include_shape_wkt=true，勿在 fields 中传入 SHAPE@*")
     _field_names_exist(arcpy, dataset_path, fnames)
     types = _field_type_map(arcpy, dataset_path)
     cursor_fields: list[str] = []
     for f in fnames:
         t = types.get(f, "")
         if t in _SKIP_TYPES:
-            raise RuntimeError(f"瀛楁 {f!r} 绫诲瀷 {t} 涓嶅厑璁稿湪姝ゅ伐鍏蜂腑璇诲彇")
+            raise RuntimeError(f"字段 {f!r} 类型 {t} 不允许在此工具中读取")
         cursor_fields.append(f)
     if include_shape_wkt:
         cursor_fields.append("SHAPE@WKT")
-    sql_clause = (None, ob) if ob else None
+    sql_clause = (None, f"ORDER BY {ob}") if ob else None
     rows_out: list[dict[str, Any]] = []
     with arcpy.da.SearchCursor(  # type: ignore[attr-defined]
         dataset_path,
