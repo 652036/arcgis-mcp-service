@@ -7,7 +7,6 @@ from typing import Any
 
 from arcgis_pro_mcp.paths import (
     require_allow_write,
-    validate_gp_output_path,
     validate_output_in_export_root,
 )
 

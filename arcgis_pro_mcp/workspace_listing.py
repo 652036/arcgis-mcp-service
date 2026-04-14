@@ -126,7 +126,7 @@ def list_domains(
     wc = _sanitize_wildcard(wild_card)
     rows: list[dict[str, Any]] = []
     with _workspace_ctx(arcpy, workspace_path):
-        domains = getattr(arcpy.da, "ListDomains")(workspace_path) or []
+        domains = arcpy.da.ListDomains(workspace_path) or []
     for dom in domains:
         name = str(getattr(dom, "name", ""))
         if wc != "*" and not fnmatch.fnmatchcase(name, wc):

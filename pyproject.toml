@@ -8,12 +8,60 @@ version = "1.0.1"
 description = "MCP server for ArcGIS Pro using ArcPy (.aprx maps, layouts, layers)"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
-  "mcp>=1.20",
+license = { file = "LICENSE" }
+keywords = ["arcgis", "arcgis-pro", "arcpy", "mcp", "gis", "model-context-protocol"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: GIS",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+dependencies = [
+  "mcp>=1.20,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.6,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/652036/arcgis-mcp-service"
+Repository = "https://github.com/652036/arcgis-mcp-service"
+Issues = "https://github.com/652036/arcgis-mcp-service/issues"
+Changelog = "https://github.com/652036/arcgis-mcp-service/blob/main/CHANGELOG.md"
 
 [project.scripts]
 arcgis-pro-mcp = "arcgis_pro_mcp.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["arcgis_pro_mcp"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "W",   # pycodestyle warnings
+  "I",   # isort
+  "UP",  # pyupgrade
+  "B",   # flake8-bugbear
+]
+ignore = [
+  "E501",  # line too long (handled by formatter / long arcpy strings)
+  "B008",  # function calls in defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]
