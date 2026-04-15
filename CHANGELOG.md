@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 
+## [Unreleased]
+
+### Added
+- Added `LICENSE` (MIT) and filled in project metadata in `pyproject.toml`
+  (license, authors-friendly URLs, classifiers, keywords, dev extras).
+- Added a `py.typed` marker so downstream type checkers can see the package's
+  annotations.
+- Added `SECURITY.md`, `CONTRIBUTING.md`, a pull-request template, bug report
+  and feature request issue templates, and a `dependabot.yml` for weekly pip
+  and GitHub Actions updates.
+- Added top-level exception handling in `arcgis_pro_mcp.__main__` so startup
+  failures print a readable message instead of a bare traceback.
+
+### Changed
+- Pinned the `mcp` dependency to `>=1.20,<2` to avoid silent breakage on a
+  future major release.
+- Expanded CI to a Python 3.10 / 3.11 / 3.12 matrix on Ubuntu and Windows,
+  plus a dedicated ruff lint job.
+- Completed the "return candidate names instead of `Invalid arguments`"
+  improvement at the remaining map frame, layout element, and legend element
+  lookup sites that were previously missed.
+
 ## [1.0.1] - 2026-03-25
 
 ### Added

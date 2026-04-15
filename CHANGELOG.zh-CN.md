@@ -4,6 +4,24 @@
 
 英文版: [`CHANGELOG.md`](./CHANGELOG.md)
 
+## [Unreleased]
+
+### 新增
+- 新增 `LICENSE`（MIT），并补齐 `pyproject.toml` 的包元信息（license、项目
+  URL、classifiers、keywords、`dev` extras）。
+- 新增 `py.typed` 标记文件，使下游类型检查器能使用包中的类型注解。
+- 新增 `SECURITY.md`、`CONTRIBUTING.md`、Pull Request 模板、Bug/功能请求 Issue
+  模板，以及针对 pip 与 GitHub Actions 的 `dependabot.yml`（每周更新）。
+- 在 `arcgis_pro_mcp.__main__` 中新增顶层异常兜底，启动失败时输出可读提示，
+  而不是裸异常堆栈。
+
+### 变更
+- 将 `mcp` 依赖收紧为 `>=1.20,<2`，避免未来主版本变更导致悄悄断裂。
+- CI 扩展为 Ubuntu + Windows 的 Python 3.10 / 3.11 / 3.12 矩阵，并新增独立
+  的 ruff lint 任务。
+- 补齐上一版"返回候选值而不是 `Invalid arguments`"的改进：此前遗漏的几处
+  map frame、layout element、legend element 查找站点现在也会返回候选列表。
+
 ## [1.0.1] - 2026-03-25
 
 ### 新增

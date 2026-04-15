@@ -1052,7 +1052,7 @@ def arcgis_pro_mapframe_extent(
             break
     if mf is None:
         names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
-        raise RuntimeError("Invalid arguments")
+        _raise_not_found("map frame", mapframe_name, names)
 
     out: dict[str, Any] = {
         "aprx_path": path,
@@ -2233,7 +2233,7 @@ def arcgis_pro_set_mapframe_extent(
             break
     if mf is None:
         names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
-        raise RuntimeError("Invalid arguments")
+        _raise_not_found("map frame", mapframe_name, names)
     ext = arcpy.Extent(float(xmin), float(ymin), float(xmax), float(ymax))  # type: ignore[attr-defined]
     if spatial_reference_wkid is not None:
         ext.spatialReference = arcpy.SpatialReference(int(spatial_reference_wkid))  # type: ignore[attr-defined]
@@ -3949,7 +3949,7 @@ def arcgis_pro_set_layout_element_position(
             break
     if elm is None:
         names = [getattr(e, "name", "") for e in layout.listElements()]
-        raise RuntimeError("Invalid arguments")
+        _raise_not_found("layout element", en, names)
     updated: dict[str, float] = {}
     if x is not None:
         elm.elementPositionX = float(x)
@@ -3989,7 +3989,7 @@ def arcgis_pro_set_layout_element_visible(
             break
     if elm is None:
         names = [getattr(e, "name", "") for e in layout.listElements()]
-        raise RuntimeError("Invalid arguments")
+        _raise_not_found("layout element", en, names)
     elm.visible = bool(visible)
     return _json_dumps({"ok": True, "aprx_path": path, "element_name": en, "visible": bool(visible)})
 
@@ -4014,7 +4014,7 @@ def arcgis_pro_update_legend_items(
             break
     if legend is None:
         names = [e.name for e in layout.listElements("LEGEND_ELEMENT")]
-        raise RuntimeError("Invalid arguments")
+        _raise_not_found("legend element", legend_name, names)
     items = legend.items
     updated_count = 0
     for item in items:
@@ -4173,7 +4173,7 @@ def arcgis_pro_zoom_to_selection(
     require_allow_write()
     arcpy, project, path = _open_project(aprx_path)
     m = _get_map(project, map_name)
-    lyr = _find_layer(m, layer_name)
+    _find_layer(m, layer_name)
     layout = _get_layout(project, layout_name)
     mf = None
     for elm in layout.listElements("MAPFRAME_ELEMENT"):
@@ -4181,7 +4181,8 @@ def arcgis_pro_zoom_to_selection(
             mf = elm
             break
     if mf is None:
-        raise RuntimeError("Invalid arguments")
+        names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
+        _raise_not_found("map frame", mapframe_name, names)
     mf.zoomToAllLayers(True)
     return _json_dumps(
         {"ok": True, "aprx_path": path, "layer_name": layer_name, "mapframe_name": mapframe_name},
