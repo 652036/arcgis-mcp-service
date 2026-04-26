@@ -107,7 +107,6 @@ def insert_features(
     dataset_path: str,
     fields: list[str],
     rows: list[list[Any]],
-    include_geometry_wkt: bool = False,
 ) -> int:
     require_allow_write()
     p = validate_input_path_optional(dataset_path, "dataset_path")
@@ -152,7 +151,6 @@ def insert_features(
 def update_features(
     arcpy: Any,
     dataset_path: str,
-    field_name: str,
     updates: dict[str, Any],
     where_clause: str = "",
     max_rows_updated: int = 1000,
@@ -163,9 +161,6 @@ def update_features(
     if len(wc) > _MAX_WHERE:
         raise RuntimeError("where_clause 过长")
     cap = max(1, min(int(max_rows_updated), _MAX_ROWS_CAP))
-    fn = field_name.strip()
-    if not fn:
-        raise RuntimeError("field_name 不能为空")
     if not updates:
         raise RuntimeError("updates 不能为空")
     update_fields = list(updates.keys())
@@ -175,17 +170,16 @@ def update_features(
             raise RuntimeError(f"未知字段: {uf!r}")
         if type_map[uf] in _SKIP_TYPES:
             raise RuntimeError(f"不支持更新 {type_map[uf]} 类型字段")
-    cursor_fields = [fn] + update_fields
     n = 0
     truncated = False
-    with arcpy.da.UpdateCursor(p, cursor_fields, wc or None) as cur:
+    with arcpy.da.UpdateCursor(p, update_fields, wc or None) as cur:
         for row in cur:
             if n >= cap:
                 truncated = True
                 break
             for i, uf in enumerate(update_fields):
                 ft = type_map[uf]
-                row[i + 1] = _parse_value(ft, updates[uf])
+                row[i] = _parse_value(ft, updates[uf])
             cur.updateRow(row)
             n += 1
     return n, truncated

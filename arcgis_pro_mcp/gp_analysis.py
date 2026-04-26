@@ -206,16 +206,31 @@ def run_eliminate(
     arcpy: Any,
     in_features: str,
     out_feature_class: str,
-    selection_type: str = "LENGTH",
+    condition: str = "AREA",
+    part_area: float = 0.0,
+    part_area_percent: float = 0.0,
+    part_option: str = "CONTAINED_ONLY",
 ) -> None:
     require_allow_write()
     require_gp_output_root_mandatory()
     inf = validate_input_path_optional(in_features, "in_features")
     out = validate_gp_output_path(out_feature_class, "out_feature_class")
-    st = selection_type.strip().upper()
-    if st not in ("LENGTH", "AREA"):
-        raise RuntimeError("selection_type 须为 LENGTH 或 AREA")
-    arcpy.management.EliminatePolygonPart(inf, out, st)
+    cond = condition.strip().upper()
+    valid_cond = {"AREA", "PERCENT", "AREA_OR_PERCENT"}
+    if cond not in valid_cond:
+        raise RuntimeError(f"condition 须为 {sorted(valid_cond)}")
+    po = part_option.strip().upper()
+    if po not in ("CONTAINED_ONLY", "ANY"):
+        raise RuntimeError("part_option 须为 CONTAINED_ONLY 或 ANY")
+    pa = float(part_area or 0.0)
+    pap = float(part_area_percent or 0.0)
+    if cond in ("AREA", "AREA_OR_PERCENT") and pa <= 0.0:
+        raise RuntimeError("condition=AREA/AREA_OR_PERCENT 时 part_area 必须 > 0")
+    if cond in ("PERCENT", "AREA_OR_PERCENT") and pap <= 0.0:
+        raise RuntimeError("condition=PERCENT/AREA_OR_PERCENT 时 part_area_percent 必须 > 0")
+    arcpy.management.EliminatePolygonPart(
+        inf, out, cond, pa, pap, po,
+    )
 
 
 def run_multipart_to_singlepart(

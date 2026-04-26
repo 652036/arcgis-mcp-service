@@ -22,9 +22,19 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
   future major release.
 - Expanded CI to a Python 3.10 / 3.11 / 3.12 matrix on Ubuntu and Windows,
   plus a dedicated ruff lint job.
-- Completed the "return candidate names instead of `Invalid arguments`"
-  improvement at the remaining map frame, layout element, and legend element
-  lookup sites that were previously missed.
+
+### Changed (breaking)
+- `arcgis_pro_gp_eliminate` parameters renamed: `selection_type` removed; new parameters are `condition` (`AREA`/`PERCENT`/`AREA_OR_PERCENT`), `part_area`, `part_area_percent`, `part_option`.
+- `arcgis_pro_da_update_features` no longer accepts the unused `field_name` argument; clients should drop it from existing calls.
+- `da_write.insert_features` no longer accepts the unused `include_geometry_wkt` argument; geometry insertion has always been driven by including `SHAPE@WKT` in `fields`.
+
+### Fixed
+- Fixed `arcgis_pro_gp_eliminate` so its parameters now correctly reflect the underlying `EliminatePolygonPart` GP. The previous `selection_type=LENGTH/AREA` was incompatible with the tool and would fail at runtime.
+- Fixed `arcgis_pro_zoom_to_selection` to actually honor `layer_name`. It now sets the map frame extent to the specified layer's (selection) extent instead of zooming to all layers.
+- Replaced every remaining `Invalid arguments` placeholder in server-side validation sites (selection / placement / overlap / join enums and map frame / layout element / legend / text element lookups) with messages that include the offending value and a list of valid choices or available candidates.
+
+### Removed
+- Removed the dead server-side `_query_rows`, `_sanitize_order_by`, `_MAX_QUERY_WHERE`, and `_MAX_QUERY_CELL` helpers superseded in 1.0.1 by the shared `da_read.query_rows` implementation.
 
 ## [1.0.1] - 2026-03-25
 

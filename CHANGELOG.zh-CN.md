@@ -19,8 +19,19 @@
 - 将 `mcp` 依赖收紧为 `>=1.20,<2`，避免未来主版本变更导致悄悄断裂。
 - CI 扩展为 Ubuntu + Windows 的 Python 3.10 / 3.11 / 3.12 矩阵，并新增独立
   的 ruff lint 任务。
-- 补齐上一版"返回候选值而不是 `Invalid arguments`"的改进：此前遗漏的几处
-  map frame、layout element、legend element 查找站点现在也会返回候选列表。
+
+### 破坏性变更
+- `arcgis_pro_gp_eliminate` 参数变更：移除 `selection_type`，改为 `condition`（`AREA`/`PERCENT`/`AREA_OR_PERCENT`）、`part_area`、`part_area_percent`、`part_option`。
+- `arcgis_pro_da_update_features` 移除从未生效的 `field_name` 参数，现有调用需删除该实参。
+- `da_write.insert_features` 移除从未生效的 `include_geometry_wkt` 参数；几何插入一直依赖在 `fields` 中加入 `SHAPE@WKT`。
+
+### 修复
+- 修复 `arcgis_pro_gp_eliminate` 参数与底层 `EliminatePolygonPart` 不匹配的问题。原参数 `selection_type=LENGTH/AREA` 在运行时会直接报错。
+- 修复 `arcgis_pro_zoom_to_selection` 不再忽略 `layer_name`，现在会按指定图层（含选择集）的范围设置地图框，而不是缩放到所有图层。
+- 将服务端所有残留的 `Invalid arguments` 占位错误（selection / placement / overlap / join 枚举校验，以及 map frame / layout element / legend / text element 查找）全部替换为包含具体取值与合法集合或候选清单的可读消息。
+
+### 删除
+- 删除服务端遗留的死代码 `_query_rows` / `_sanitize_order_by` / `_MAX_QUERY_WHERE` / `_MAX_QUERY_CELL`，这些在 1.0.1 已由共享的 `da_read.query_rows` 替代。
 
 ## [1.0.1] - 2026-03-25
 

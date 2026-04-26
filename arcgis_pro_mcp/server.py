@@ -176,20 +176,6 @@ def _list_workspace_domains(arcpy: Any, workspace_path: str, max_items: int = 20
     return rows
 
 
-_MAX_QUERY_WHERE = 8000
-_MAX_QUERY_CELL = 2000
-
-
-def _sanitize_order_by(order_by: str) -> str:
-    ob = (order_by or "").strip()
-    if not ob:
-        return ""
-    if len(ob) > _MAX_QUERY_WHERE:
-        raise RuntimeError("order_by 过长")
-    if any(ch in ob for ch in ("\r", "\n", ";")):
-        raise RuntimeError("order_by 不能包含换行或分号")
-    return ob
-
 def _validate_view_name(name: str, label: str) -> str:
     out = (name or "").strip()
     if not out:
@@ -199,56 +185,6 @@ def _validate_view_name(name: str, label: str) -> str:
     if any(ch in out for ch in ("\r", "\n", ";", "\\", "/")):
         raise RuntimeError(f"{label} contains invalid characters")
     return out
-
-
-def _query_rows(
-    arcpy: Any,
-    dataset_path: str,
-    fields: list[str],
-    where_clause: str = "",
-    order_by: str = "",
-    max_rows: int = 100,
-    offset: int = 0,
-    include_shape_wkt: bool = False,
-) -> list[dict[str, Any]]:
-    w = (where_clause or "").strip()
-    if len(w) > _MAX_QUERY_WHERE:
-        raise RuntimeError("where_clause 过长")
-    cap = max(1, min(int(max_rows), 500))
-    start = max(0, min(int(offset), 1_000_000))
-    fnames = [f.strip() for f in fields if f.strip()]
-    if not fnames:
-        raise RuntimeError("fields 不能为空")
-    if any(f.upper().startswith("SHAPE@") for f in fnames):
-        raise RuntimeError("fields 不能包含 SHAPE@*，请使用 include_shape_wkt")
-    valid = {f.name for f in arcpy.ListFields(dataset_path)}
-    missing = [f for f in fnames if f not in valid]
-    if missing:
-        _raise_not_found("field", ", ".join(missing), sorted(valid))
-    cursor_fields = list(fnames)
-    if include_shape_wkt:
-        cursor_fields.append("SHAPE@WKT")
-    ob = _sanitize_order_by(order_by)
-    sql_clause = (None, f"ORDER BY {ob}") if ob else None
-    rows_out: list[dict[str, Any]] = []
-    with arcpy.da.SearchCursor(dataset_path, cursor_fields, w or None, sql_clause=sql_clause) as cur:  # type: ignore[attr-defined]
-        for idx, row in enumerate(cur):
-            if idx < start:
-                continue
-            if len(rows_out) >= cap:
-                break
-            d: dict[str, Any] = {}
-            for j, name in enumerate(cursor_fields):
-                val = row[j]
-                if val is None:
-                    d[name] = None
-                elif isinstance(val, (int, float, bool)):
-                    d[name] = val
-                else:
-                    s = str(val)
-                    d[name] = s if len(s) <= _MAX_QUERY_CELL else s[:_MAX_QUERY_CELL] + "..."
-            rows_out.append(d)
-    return rows_out
 
 
 def _spatial_ref_dict(sr: Any) -> dict[str, Any] | None:
@@ -1319,7 +1255,7 @@ def arcgis_pro_select_layer_by_attribute(
     lyr = _find_layer(m, layer_name)
     st = selection_type.strip().upper()
     if st not in _SELECTION_TYPES:
-        raise RuntimeError("Invalid arguments")
+        raise RuntimeError(f"selection_type 须为 {sorted(_SELECTION_TYPES)}")
     wc = where_clause.strip()
     if len(wc) > 8000:
         raise RuntimeError("where_clause 过长")
@@ -1743,7 +1679,7 @@ def arcgis_pro_move_layer(
     mov = _find_layer(m, layer_to_move_name)
     pl = placement.strip().upper()
     if pl not in _PLACE_LAYER:
-        raise RuntimeError("Invalid arguments")
+        raise RuntimeError(f"placement 须为 {sorted(_PLACE_LAYER)}")
     m.moveLayer(ref, mov, pl)  # type: ignore[attr-defined]
     return _json_dumps(
         {
@@ -1897,13 +1833,13 @@ def arcgis_pro_select_layer_by_location(
     sel_lyr = _find_layer(m, selecting_layer_name)
     ov = overlap_type.strip().upper()
     if ov not in _OVERLAP_LOCATION:
-        raise RuntimeError("Invalid arguments")
+        raise RuntimeError(f"overlap_type 须为 {sorted(_OVERLAP_LOCATION)}")
     sd = (search_distance or "").strip()
     if ov in _DISTANCE_OVERLAP and not sd:
         raise RuntimeError("当前 overlap_type 必须提供 search_distance")
     st = selection_type.strip().upper()
     if st not in _SELECTION_TYPES:
-        raise RuntimeError("Invalid arguments")
+        raise RuntimeError(f"selection_type 须为 {sorted(_SELECTION_TYPES)}")
     inv = "INVERT" if invert_spatial_relationship else "NOT_INVERT"
     arcpy.management.SelectLayerByLocation(
         input_lyr,
@@ -2117,7 +2053,7 @@ def arcgis_pro_add_join(
     lyr = _find_layer(m, layer_name)
     jt = join_type.strip().upper()
     if jt not in _JOIN_TYPES:
-        raise RuntimeError("Invalid arguments")
+        raise RuntimeError(f"join_type 须为 {sorted(_JOIN_TYPES)}")
     jpath = validate_input_path_optional(join_table_path, "join_table_path")
     arcpy.management.AddJoin(lyr, layer_field.strip(), jpath, join_field.strip(), jt)
     return _json_dumps(
@@ -2172,11 +2108,15 @@ def _find_layout_text_element(layout: Any, element_name: str, element_type: str)
         raise RuntimeError(
             'element_type 须为空、TEXT_ELEMENT 或 TEXT_GRAPHIC_ELEMENT（也可用 GRAPHIC_ELEMENT）'
         )
+    available: list[str] = []
     for tt in order:
         for elm in layout.listElements(tt):
-            if getattr(elm, "name", "") == en:
+            nm = getattr(elm, "name", "")
+            if nm == en:
                 return elm
-    raise RuntimeError("Invalid arguments")
+            if nm:
+                available.append(nm)
+    _raise_not_found("text element", en, available)
 
 
 @mcp.tool(
@@ -2772,14 +2712,13 @@ def arcgis_pro_da_insert_features(
 )
 def arcgis_pro_da_update_features(
     dataset_path: str,
-    field_name: str,
     updates: dict[str, Any],
     where_clause: str = "",
     max_rows_updated: int = 1000,
 ) -> str:
     arcpy = _arcpy()
     n, truncated = da_write.update_features(
-        arcpy, dataset_path, field_name, updates, where_clause, max_rows_updated
+        arcpy, dataset_path, updates, where_clause, max_rows_updated
     )
     return _json_dumps(
         {
@@ -3363,10 +3302,21 @@ def arcgis_pro_gp_check_geometry(in_features: str, out_table: str) -> str:
 def arcgis_pro_gp_eliminate(
     in_features: str,
     out_feature_class: str,
-    selection_type: str = "LENGTH",
+    condition: str = "AREA",
+    part_area: float = 0.0,
+    part_area_percent: float = 0.0,
+    part_option: str = "CONTAINED_ONLY",
 ) -> str:
     arcpy = _arcpy()
-    gp_analysis.run_eliminate(arcpy, in_features, out_feature_class, selection_type)
+    gp_analysis.run_eliminate(
+        arcpy,
+        in_features,
+        out_feature_class,
+        condition,
+        part_area,
+        part_area_percent,
+        part_option,
+    )
     return _json_dumps(
         {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
     )
@@ -3948,7 +3898,7 @@ def arcgis_pro_set_layout_element_position(
             elm = e
             break
     if elm is None:
-        names = [getattr(e, "name", "") for e in layout.listElements()]
+        names = [getattr(e, "name", "") for e in layout.listElements() if getattr(e, "name", "")]
         _raise_not_found("layout element", en, names)
     updated: dict[str, float] = {}
     if x is not None:
@@ -3988,7 +3938,7 @@ def arcgis_pro_set_layout_element_visible(
             elm = e
             break
     if elm is None:
-        names = [getattr(e, "name", "") for e in layout.listElements()]
+        names = [getattr(e, "name", "") for e in layout.listElements() if getattr(e, "name", "")]
         _raise_not_found("layout element", en, names)
     elm.visible = bool(visible)
     return _json_dumps({"ok": True, "aprx_path": path, "element_name": en, "visible": bool(visible)})
@@ -4150,7 +4100,8 @@ def arcgis_pro_zoom_to_layer(
             mf = elm
             break
     if mf is None:
-        raise RuntimeError("Invalid arguments")
+        names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
+        _raise_not_found("mapframe", mapframe_name, names)
     desc = arcpy.Describe(lyr)
     ext = desc.extent
     mf.setExtent(ext)
@@ -4173,7 +4124,7 @@ def arcgis_pro_zoom_to_selection(
     require_allow_write()
     arcpy, project, path = _open_project(aprx_path)
     m = _get_map(project, map_name)
-    _find_layer(m, layer_name)
+    lyr = _find_layer(m, layer_name)
     layout = _get_layout(project, layout_name)
     mf = None
     for elm in layout.listElements("MAPFRAME_ELEMENT"):
@@ -4183,7 +4134,13 @@ def arcgis_pro_zoom_to_selection(
     if mf is None:
         names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
         _raise_not_found("map frame", mapframe_name, names)
-    mf.zoomToAllLayers(True)
+    desc = arcpy.Describe(lyr)
+    ext = getattr(desc, "extent", None)
+    if ext is None:
+        raise RuntimeError(
+            f"图层 {layer_name!r} 无可用范围（图层为空或当前选择集为空）"
+        )
+    mf.setExtent(ext)
     return _json_dumps(
         {"ok": True, "aprx_path": path, "layer_name": layer_name, "mapframe_name": mapframe_name},
     )
@@ -4554,7 +4511,8 @@ def arcgis_pro_map_pan_to_extent(
             mf = elm
             break
     if mf is None:
-        raise RuntimeError("Invalid arguments")
+        names = [e.name for e in layout.listElements("MAPFRAME_ELEMENT")]
+        _raise_not_found("mapframe", mapframe_name, names)
     ext = arcpy.Extent(float(xmin), float(ymin), float(xmax), float(ymax))
     if spatial_reference_wkid is not None:
         ext.spatialReference = arcpy.SpatialReference(int(spatial_reference_wkid))
