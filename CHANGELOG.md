@@ -7,6 +7,10 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 ## [Unreleased]
 
 ### Added
+- Added a repo-local Codex skill at `skills/arcgis-pro-mcp/SKILL.md`, with
+  references for ArcGIS Pro runtime requirements, write/path safety gates,
+  grouped MCP tools, and development notes.
+- Added `AGENTS.md` and `CLAUDE.md` for repository-specific agent guidance.
 - Added `LICENSE` (MIT) and filled in project metadata in `pyproject.toml`
   (license, authors-friendly URLs, classifiers, keywords, dev extras).
 - Added a `py.typed` marker so downstream type checkers can see the package's
@@ -66,4 +70,3 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 ### Security
 - Restricted the generic GP runner so it no longer acts as an unrestricted bypass around the curated MCP tool surface.
 - Prevented inline database passwords by default; direct password parameters now require `ARCGIS_PRO_MCP_ALLOW_INLINE_DB_PASSWORD=1`.
-

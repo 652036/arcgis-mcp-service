@@ -1,0 +1,11 @@
+interface:
+  display_name: "ArcGIS Pro MCP"
+  short_description: "Operate ArcGIS Pro through MCP safely"
+  default_prompt: "Use $arcgis-pro-mcp to inspect ArcGIS Pro projects, layers, layouts, and GP workflows safely."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "arcgis-pro"
+      description: "ArcGIS Pro MCP stdio server using ArcGIS Pro Python and constrained ArcPy automation"
+      transport: "stdio"

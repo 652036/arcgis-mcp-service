@@ -88,6 +88,12 @@ python -m arcgis_pro_mcp
 - 通用 GP 是否开启及 allowlist
 - 当前服务暴露了哪些工具类别
 
+## Codex Skill
+
+本仓库包含一个项目内 Codex skill：`skills/arcgis-pro-mcp/SKILL.md`。
+
+该 skill 面向使用本 MCP 服务的 Agent，覆盖 ArcGIS Pro Python 运行要求、启动探测顺序、写入开关、路径根目录、导出/GP 输出约束、通用 GP allowlist 规则，以及 `skills/arcgis-pro-mcp/references/` 下的工具分组与开发说明。
+
 ## 工具概览
 
 下面是当前服务的高层分类。完整工具名请以 `arcgis_pro_server_capabilities` 为准。

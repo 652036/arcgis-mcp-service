@@ -7,6 +7,9 @@
 ## [Unreleased]
 
 ### 新增
+- 新增仓库内 Codex skill：`skills/arcgis-pro-mcp/SKILL.md`，并配套
+  ArcGIS Pro 运行要求、写入/路径安全开关、MCP 工具分组与开发说明参考文档。
+- 新增 `AGENTS.md` 与 `CLAUDE.md`，用于项目级 Agent 协作说明。
 - 新增 `LICENSE`（MIT），并补齐 `pyproject.toml` 的包元信息（license、项目
   URL、classifiers、keywords、`dev` extras）。
 - 新增 `py.typed` 标记文件，使下游类型检查器能使用包中的类型注解。
