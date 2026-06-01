@@ -64,3 +64,16 @@
 - Raster: `arcgis_pro_gp_slope`, `arcgis_pro_gp_aspect`, `arcgis_pro_gp_hillshade`, `arcgis_pro_gp_reclassify`, `arcgis_pro_gp_extract_by_mask`, `arcgis_pro_gp_extract_by_attributes`, `arcgis_pro_gp_zonal_statistics_as_table`, `arcgis_pro_gp_kernel_density`, `arcgis_pro_gp_point_density`, `arcgis_pro_gp_idw`, `arcgis_pro_gp_kriging`, `arcgis_pro_gp_topo_to_raster`, `arcgis_pro_gp_raster_to_polygon`, `arcgis_pro_gp_polygon_to_raster`, `arcgis_pro_gp_feature_to_raster`, `arcgis_pro_gp_raster_calculator`, `arcgis_pro_gp_mosaic_to_new_raster`, `arcgis_pro_gp_clip_raster`, `arcgis_pro_gp_resample`, `arcgis_pro_gp_project_raster`, `arcgis_pro_gp_nibble`
 - Generic GP: `arcgis_pro_gp_run_tool`, `arcgis_pro_gp_get_messages`, `arcgis_pro_gp_list_toolboxes`, `arcgis_pro_gp_list_tools_in_toolbox`
 - Network analysis: `arcgis_pro_na_create_route_layer`, `arcgis_pro_na_add_locations`, `arcgis_pro_na_solve`, `arcgis_pro_na_service_area`, `arcgis_pro_na_od_matrix`
+
+## Spatial Statistics, Regression, And Sampling (Research)
+
+Spatial Statistics toolbox wrappers. Diagnostic tools return geoprocessing
+messages so indices/diagnostics can be captured for reporting. Output-producing
+tools follow the same write gate (`ARCGIS_PRO_MCP_ALLOW_WRITE`) and output-root
+(`ARCGIS_PRO_MCP_GP_OUTPUT_ROOT`) policy as other write GP tools.
+
+- Cluster/pattern: `arcgis_pro_gp_hot_spots` (Getis-Ord Gi*), `arcgis_pro_gp_optimized_hot_spots`, `arcgis_pro_gp_cluster_outlier` (Anselin Local Moran's I), `arcgis_pro_gp_multi_distance_spatial_clustering` (Ripley's K)
+- Read-only diagnostics: `arcgis_pro_gp_spatial_autocorrelation` (Global Moran's I), `arcgis_pro_gp_average_nearest_neighbor`
+- Regression/modeling: `arcgis_pro_gp_ordinary_least_squares` (OLS), `arcgis_pro_gp_gwr` (Geographically Weighted Regression), `arcgis_pro_gp_forest` (forest-based classification/regression, TRAIN)
+- Distribution description: `arcgis_pro_gp_central_feature`, `arcgis_pro_gp_mean_center`, `arcgis_pro_gp_directional_distribution` (standard deviational ellipse)
+- Sampling/binning: `arcgis_pro_gp_create_random_points`, `arcgis_pro_gp_generate_tessellation` (hexbin/grid)
