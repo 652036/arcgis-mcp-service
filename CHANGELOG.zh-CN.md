@@ -24,6 +24,11 @@
 - 在 `arcgis_pro_mcp.__main__` 中新增顶层异常兜底，启动失败时输出可读提示，
   而不是裸异常堆栈。
 
+### 修复
+- `arcgis_pro_gp_import_csv_to_table` 不再与 `arcgis_pro_gp_table_to_table`
+  完全重复。改为调用专用的 `run_import_csv_to_table`，校验输入为分隔文本文件
+  （`.csv`/`.txt`/`.tab`），并使用语义更清晰的 `in_csv` 参数名。
+
 ### 变更
 - 将 `mcp` 依赖收紧为 `>=1.20,<2`，避免未来主版本变更导致悄悄断裂。
 - CI 扩展为 Ubuntu + Windows 的 Python 3.10 / 3.11 / 3.12 矩阵，并新增独立

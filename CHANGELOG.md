@@ -30,6 +30,12 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 - Added top-level exception handling in `arcgis_pro_mcp.__main__` so startup
   failures print a readable message instead of a bare traceback.
 
+### Fixed
+- `arcgis_pro_gp_import_csv_to_table` no longer silently duplicates
+  `arcgis_pro_gp_table_to_table`. It now routes through a dedicated
+  `run_import_csv_to_table` that validates the input is a delimited text file
+  (`.csv`/`.txt`/`.tab`) and uses the clearer `in_csv` parameter name.
+
 ### Changed
 - Pinned the `mcp` dependency to `>=1.20,<2` to avoid silent breakage on a
   future major release.

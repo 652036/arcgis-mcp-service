@@ -2998,12 +2998,12 @@ def arcgis_pro_gp_alter_field(
     description="",
 )
 def arcgis_pro_gp_import_csv_to_table(
-    in_rows: str,
+    in_csv: str,
     out_path: str,
     out_name: str,
 ) -> str:
     arcpy = _arcpy()
-    result_path = gp_convert.run_table_to_table(arcpy, in_rows, out_path, out_name)
+    result_path = gp_convert.run_import_csv_to_table(arcpy, in_csv, out_path, out_name)
     return _json_dumps({"ok": True, "created": result_path})
 
 
