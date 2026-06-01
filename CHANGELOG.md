@@ -7,6 +7,15 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 ## [Unreleased]
 
 ### Added
+- Added a research-focused spatial statistics module (`arcgis_pro_mcp/gp_stats.py`)
+  registering 14 new MCP tools: Getis-Ord Gi* hot spots, optimized hot spots,
+  Anselin Local Moran's I cluster/outlier, Ripley's K multi-distance clustering,
+  Global Moran's I spatial autocorrelation, average nearest neighbor, OLS, GWR,
+  forest-based classification/regression, central feature, mean center,
+  directional distribution (standard deviational ellipse), create random points,
+  and generate tessellation. Diagnostic tools return geoprocessing messages so
+  statistical indices can be captured for reporting; all output-producing tools
+  honor the existing write gate and GP output-root policy.
 - Added a repo-local Codex skill at `skills/arcgis-pro-mcp/SKILL.md`, with
   references for ArcGIS Pro runtime requirements, write/path safety gates,
   grouped MCP tools, and development notes.
@@ -20,6 +29,12 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
   and GitHub Actions updates.
 - Added top-level exception handling in `arcgis_pro_mcp.__main__` so startup
   failures print a readable message instead of a bare traceback.
+
+### Fixed
+- `arcgis_pro_gp_import_csv_to_table` no longer silently duplicates
+  `arcgis_pro_gp_table_to_table`. It now routes through a dedicated
+  `run_import_csv_to_table` that validates the input is a delimited text file
+  (`.csv`/`.txt`/`.tab`) and uses the clearer `in_csv` parameter name.
 
 ### Changed
 - Pinned the `mcp` dependency to `>=1.20,<2` to avoid silent breakage on a

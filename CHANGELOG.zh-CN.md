@@ -7,6 +7,12 @@
 ## [Unreleased]
 
 ### 新增
+- 新增面向科研的空间统计模块（`arcgis_pro_mcp/gp_stats.py`），注册 14 个新 MCP
+  工具：Getis-Ord Gi* 热点分析、优化热点分析、Anselin Local Moran's I 聚类与异常、
+  Ripley's K 多距离空间聚类、全局 Moran's I 空间自相关、平均最近邻、OLS 普通最小二乘、
+  GWR 地理加权回归、基于森林的分类与回归（训练）、中心要素、平均中心、方向分布
+  （标准差椭圆）、创建随机点、生成镶嵌格网（蜂窝/网格）。诊断类工具返回地理处理
+  消息以便记录统计指标；所有产出型工具沿用现有写入开关与 GP 输出根目录策略。
 - 新增仓库内 Codex skill：`skills/arcgis-pro-mcp/SKILL.md`，并配套
   ArcGIS Pro 运行要求、写入/路径安全开关、MCP 工具分组与开发说明参考文档。
 - 新增 `AGENTS.md` 与 `CLAUDE.md`，用于项目级 Agent 协作说明。
@@ -17,6 +23,11 @@
   模板，以及针对 pip 与 GitHub Actions 的 `dependabot.yml`（每周更新）。
 - 在 `arcgis_pro_mcp.__main__` 中新增顶层异常兜底，启动失败时输出可读提示，
   而不是裸异常堆栈。
+
+### 修复
+- `arcgis_pro_gp_import_csv_to_table` 不再与 `arcgis_pro_gp_table_to_table`
+  完全重复。改为调用专用的 `run_import_csv_to_table`，校验输入为分隔文本文件
+  （`.csv`/`.txt`/`.tab`），并使用语义更清晰的 `in_csv` 参数名。
 
 ### 变更
 - 将 `mcp` 依赖收紧为 `>=1.20,<2`，避免未来主版本变更导致悄悄断裂。

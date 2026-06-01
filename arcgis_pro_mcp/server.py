@@ -20,6 +20,7 @@ from arcgis_pro_mcp import (
     gp_network,
     gp_raster,
     gp_schema,
+    gp_stats,
     gp_write,
     metadata,
     symbology,
@@ -343,6 +344,8 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_gp_list_toolboxes",
         "arcgis_pro_gp_list_tools_in_toolbox",
         "arcgis_pro_get_metadata",
+        "arcgis_pro_gp_spatial_autocorrelation",
+        "arcgis_pro_gp_average_nearest_neighbor",
     ]
     tools_write = [
         "arcgis_pro_save_project",
@@ -491,6 +494,18 @@ def arcgis_pro_server_capabilities() -> str:
         "arcgis_pro_na_od_matrix",
         "arcgis_pro_set_metadata",
         "arcgis_pro_gp_validate_topology",
+        "arcgis_pro_gp_hot_spots",
+        "arcgis_pro_gp_optimized_hot_spots",
+        "arcgis_pro_gp_cluster_outlier",
+        "arcgis_pro_gp_multi_distance_spatial_clustering",
+        "arcgis_pro_gp_ordinary_least_squares",
+        "arcgis_pro_gp_gwr",
+        "arcgis_pro_gp_forest",
+        "arcgis_pro_gp_central_feature",
+        "arcgis_pro_gp_mean_center",
+        "arcgis_pro_gp_directional_distribution",
+        "arcgis_pro_gp_create_random_points",
+        "arcgis_pro_gp_generate_tessellation",
     ]
     tools_export = [
         "arcgis_pro_export_layout_pdf",
@@ -2983,12 +2998,12 @@ def arcgis_pro_gp_alter_field(
     description="",
 )
 def arcgis_pro_gp_import_csv_to_table(
-    in_rows: str,
+    in_csv: str,
     out_path: str,
     out_name: str,
 ) -> str:
     arcpy = _arcpy()
-    result_path = gp_convert.run_table_to_table(arcpy, in_rows, out_path, out_name)
+    result_path = gp_convert.run_import_csv_to_table(arcpy, in_csv, out_path, out_name)
     return _json_dumps({"ok": True, "created": result_path})
 
 
@@ -4802,3 +4817,350 @@ def arcgis_pro_gp_table_to_table(
     arcpy = _arcpy()
     result_path = gp_convert.run_table_to_table(arcpy, in_rows, out_path, out_name)
     return _json_dumps({"ok": True, "created": result_path})
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Spatial statistics, regression, and sampling (research workflows)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_hot_spots",
+    description="",
+)
+def arcgis_pro_gp_hot_spots(
+    in_features: str,
+    input_field: str,
+    out_feature_class: str,
+    conceptualization: str = "FIXED_DISTANCE_BAND",
+    distance_method: str = "EUCLIDEAN_DISTANCE",
+    standardization: str = "NONE",
+    distance_band: float | None = None,
+    apply_fdr: bool = False,
+) -> str:
+    arcpy = _arcpy()
+    msgs = gp_stats.run_hot_spots(
+        arcpy,
+        in_features,
+        input_field,
+        out_feature_class,
+        conceptualization,
+        distance_method,
+        standardization,
+        distance_band,
+        apply_fdr,
+    )
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class), "messages": msgs},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_optimized_hot_spots",
+    description="",
+)
+def arcgis_pro_gp_optimized_hot_spots(
+    in_features: str,
+    out_features: str,
+    analysis_field: str = "",
+    aggregation_method: str = "",
+    cell_size: float | None = None,
+    distance_band: float | None = None,
+) -> str:
+    arcpy = _arcpy()
+    msgs = gp_stats.run_optimized_hot_spots(
+        arcpy, in_features, out_features, analysis_field, aggregation_method, cell_size, distance_band
+    )
+    return _json_dumps(
+        {"ok": True, "out_features": normalize_path(out_features), "messages": msgs},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_cluster_outlier",
+    description="",
+)
+def arcgis_pro_gp_cluster_outlier(
+    in_features: str,
+    input_field: str,
+    out_feature_class: str,
+    conceptualization: str = "FIXED_DISTANCE_BAND",
+    distance_method: str = "EUCLIDEAN_DISTANCE",
+    standardization: str = "NONE",
+    distance_band: float | None = None,
+    apply_fdr: bool = False,
+    number_of_permutations: int | None = None,
+) -> str:
+    arcpy = _arcpy()
+    msgs = gp_stats.run_cluster_outlier(
+        arcpy,
+        in_features,
+        input_field,
+        out_feature_class,
+        conceptualization,
+        distance_method,
+        standardization,
+        distance_band,
+        apply_fdr,
+        number_of_permutations,
+    )
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class), "messages": msgs},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_spatial_autocorrelation",
+    description="",
+)
+def arcgis_pro_gp_spatial_autocorrelation(
+    in_features: str,
+    input_field: str,
+    conceptualization: str = "INVERSE_DISTANCE",
+    distance_method: str = "EUCLIDEAN_DISTANCE",
+    standardization: str = "ROW",
+    distance_band: float | None = None,
+    generate_report: bool = False,
+) -> str:
+    arcpy = _arcpy()
+    msgs = gp_stats.run_spatial_autocorrelation(
+        arcpy,
+        in_features,
+        input_field,
+        conceptualization,
+        distance_method,
+        standardization,
+        distance_band,
+        generate_report,
+    )
+    return _json_dumps({"ok": True, "messages": msgs})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_average_nearest_neighbor",
+    description="",
+)
+def arcgis_pro_gp_average_nearest_neighbor(
+    in_features: str,
+    distance_method: str = "EUCLIDEAN_DISTANCE",
+    generate_report: bool = False,
+    area: float | None = None,
+) -> str:
+    arcpy = _arcpy()
+    msgs = gp_stats.run_average_nearest_neighbor(
+        arcpy, in_features, distance_method, generate_report, area
+    )
+    return _json_dumps({"ok": True, "messages": msgs})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_multi_distance_spatial_clustering",
+    description="",
+)
+def arcgis_pro_gp_multi_distance_spatial_clustering(
+    in_features: str,
+    out_table: str,
+    number_of_distance_bands: int,
+    compute_confidence_envelope: str = "0_PERMUTATIONS",
+    weight_field: str = "",
+    beginning_distance: float | None = None,
+    distance_increment: float | None = None,
+) -> str:
+    arcpy = _arcpy()
+    msgs = gp_stats.run_multi_distance_spatial_clustering(
+        arcpy,
+        in_features,
+        out_table,
+        number_of_distance_bands,
+        compute_confidence_envelope,
+        weight_field,
+        beginning_distance,
+        distance_increment,
+    )
+    return _json_dumps(
+        {"ok": True, "out_table": normalize_path(out_table), "messages": msgs},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_ordinary_least_squares",
+    description="",
+)
+def arcgis_pro_gp_ordinary_least_squares(
+    in_features: str,
+    unique_id_field: str,
+    out_feature_class: str,
+    dependent_variable: str,
+    explanatory_variables: list[str],
+    coefficient_output_table: str = "",
+    diagnostic_output_table: str = "",
+) -> str:
+    arcpy = _arcpy()
+    msgs = gp_stats.run_ordinary_least_squares(
+        arcpy,
+        in_features,
+        unique_id_field,
+        out_feature_class,
+        dependent_variable,
+        explanatory_variables,
+        coefficient_output_table,
+        diagnostic_output_table,
+    )
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class), "messages": msgs},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_gwr",
+    description="",
+)
+def arcgis_pro_gp_gwr(
+    in_features: str,
+    dependent_variable: str,
+    explanatory_variables: list[str],
+    out_features: str,
+    model_type: str = "CONTINUOUS",
+    neighborhood_type: str = "NUMBER_OF_NEIGHBORS",
+    neighborhood_selection_method: str = "GOLDEN_SEARCH",
+    number_of_neighbors: int | None = None,
+    distance_band: float | None = None,
+) -> str:
+    arcpy = _arcpy()
+    msgs = gp_stats.run_gwr(
+        arcpy,
+        in_features,
+        dependent_variable,
+        explanatory_variables,
+        out_features,
+        model_type,
+        neighborhood_type,
+        neighborhood_selection_method,
+        number_of_neighbors,
+        distance_band,
+    )
+    return _json_dumps(
+        {"ok": True, "out_features": normalize_path(out_features), "messages": msgs},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_forest",
+    description="",
+)
+def arcgis_pro_gp_forest(
+    in_features: str,
+    variable_predict: str,
+    explanatory_variables: list[str],
+    prediction_type: str = "TRAIN",
+    explanatory_variables_categorical: list[str] | None = None,
+    treat_variable_as_categorical: bool = False,
+    number_of_trees: int = 100,
+    output_trained_features: str = "",
+) -> str:
+    arcpy = _arcpy()
+    msgs = gp_stats.run_forest(
+        arcpy,
+        in_features,
+        variable_predict,
+        explanatory_variables,
+        prediction_type,
+        explanatory_variables_categorical,
+        treat_variable_as_categorical,
+        number_of_trees,
+        output_trained_features,
+    )
+    return _json_dumps({"ok": True, "messages": msgs})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_central_feature",
+    description="",
+)
+def arcgis_pro_gp_central_feature(
+    in_features: str,
+    out_feature_class: str,
+    distance_method: str = "EUCLIDEAN_DISTANCE",
+    weight_field: str = "",
+    case_field: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_stats.run_central_feature(
+        arcpy, in_features, out_feature_class, distance_method, weight_field, case_field
+    )
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_mean_center",
+    description="",
+)
+def arcgis_pro_gp_mean_center(
+    in_features: str,
+    out_feature_class: str,
+    weight_field: str = "",
+    case_field: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_stats.run_mean_center(arcpy, in_features, out_feature_class, weight_field, case_field)
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_directional_distribution",
+    description="",
+)
+def arcgis_pro_gp_directional_distribution(
+    in_features: str,
+    out_feature_class: str,
+    ellipse_size: str = "1_STANDARD_DEVIATION",
+    weight_field: str = "",
+    case_field: str = "",
+) -> str:
+    arcpy = _arcpy()
+    gp_stats.run_directional_distribution(
+        arcpy, in_features, out_feature_class, ellipse_size, weight_field, case_field
+    )
+    return _json_dumps(
+        {"ok": True, "out_feature_class": normalize_path(out_feature_class)},
+    )
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_create_random_points",
+    description="",
+)
+def arcgis_pro_gp_create_random_points(
+    out_path: str,
+    out_name: str,
+    number_of_points: int,
+    constraining_feature_class: str = "",
+    minimum_allowed_distance: str = "",
+) -> str:
+    arcpy = _arcpy()
+    created = gp_stats.run_create_random_points(
+        arcpy, out_path, out_name, number_of_points, constraining_feature_class, minimum_allowed_distance
+    )
+    return _json_dumps({"ok": True, "created": created})
+
+
+@mcp.tool(
+    name="arcgis_pro_gp_generate_tessellation",
+    description="",
+)
+def arcgis_pro_gp_generate_tessellation(
+    output_feature_class: str,
+    extent: str,
+    shape_type: str = "HEXAGON",
+    size: str = "",
+    spatial_reference_wkid: int | None = None,
+) -> str:
+    arcpy = _arcpy()
+    out = gp_stats.run_generate_tessellation(
+        arcpy, output_feature_class, extent, shape_type, size, spatial_reference_wkid
+    )
+    return _json_dumps({"ok": True, "output_feature_class": normalize_path(out)})

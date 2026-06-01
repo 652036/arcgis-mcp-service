@@ -24,6 +24,21 @@ def run_table_to_table(arcpy: Any, in_rows: str, out_path: str, out_name: str) -
     return f"{op}\\{on}"
 
 
+def run_import_csv_to_table(arcpy: Any, in_csv: str, out_path: str, out_name: str) -> str:
+    """Import a delimited text file (CSV/TXT/TAB) into a geodatabase/dbf table."""
+    require_allow_write()
+    require_gp_output_root_mandatory()
+    inf = validate_input_path_optional(in_csv, "in_csv")
+    if not inf.lower().endswith((".csv", ".txt", ".tab")):
+        raise RuntimeError("in_csv 应为分隔文本文件（.csv/.txt/.tab）")
+    op = validate_gp_output_path(out_path, "out_path")
+    on = out_name.strip()
+    if not on:
+        raise RuntimeError("out_name 不能为空")
+    arcpy.conversion.TableToTable(inf, op, on)
+    return f"{op}\\{on}"
+
+
 def run_excel_to_table(arcpy: Any, input_excel: str, out_table: str, sheet: str = "") -> None:
     require_allow_write()
     require_gp_output_root_mandatory()
