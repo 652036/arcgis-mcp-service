@@ -1,0 +1,11 @@
+interface:
+  display_name: "ArcGIS Pro MCP"
+  short_description: "Control ArcGIS Pro files and the live window"
+  default_prompt: "Use $arcgis-pro-mcp to inspect or safely control an ArcGIS Pro project, choosing file mode or the attached live window explicitly."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "arcgis-pro"
+      description: "ArcGIS Pro MCP stdio server for constrained ArcPy file workflows and authenticated live-window routing"
+      transport: "stdio"

@@ -1,0 +1,29 @@
+*.log
+.env
+.env.local
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# NTFS junctions to skills/arcgis-pro-mcp — do not commit duplicate copies
+.cursor/skills/
+.claude/skills/
+.grok/skills/
+
+# Machine-local MCP client configuration (may contain paths or credentials)
+.mcp.json
+.cursor/mcp.json
+.grok/config.toml
+
+# Local scratch/data download helpers
+.tmp_*.py
+
+# ArcGIS-generated toolbox metadata may embed absolute workstation paths
+*.pyt.xml
