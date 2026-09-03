@@ -11,6 +11,21 @@ dist/
 build/
 .pytest_cache/
 .ruff_cache/
+.test-mcp1/
+
+# ArcGIS Pro SDK build output and installable packages
+sdk/**/bin/
+sdk/**/obj/
+*.esriAddInX
+
+# Live-bridge credentials/discovery and machine-local GIS connections/projects
+bridge-*.json
+*.aprx
+*.sde
+*.ags
+*.sd
+*.sddraft
+*.gdb/
 
 # NTFS junctions to skills/arcgis-pro-mcp — do not commit duplicate copies
 .cursor/skills/

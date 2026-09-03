@@ -187,7 +187,10 @@ def run_repair_geometry(
 ) -> None:
     require_allow_write()
     inf = validate_input_path_optional(in_features, "in_features")
-    arcpy.management.RepairGeometry(inf)
+    # ArcPy defaults to DELETE_NULL, which can silently delete records.  The
+    # public MCP wrapper deliberately fixes KEEP_NULL so this remains a repair,
+    # not a row-deletion endpoint.
+    arcpy.management.RepairGeometry(inf, "KEEP_NULL")
 
 
 def run_check_geometry(

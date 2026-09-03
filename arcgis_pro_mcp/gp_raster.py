@@ -9,6 +9,7 @@ from arcgis_pro_mcp.paths import (
     require_gp_output_root_mandatory,
     validate_gp_output_path,
     validate_input_path_optional,
+    validate_output_name,
 )
 
 
@@ -322,9 +323,7 @@ def run_mosaic_to_new_raster(
         raise RuntimeError("input_rasters 不能为空")
     ins = [validate_input_path_optional(p, f"raster_{i}") for i, p in enumerate(input_rasters)]
     ol = validate_gp_output_path(output_location, "output_location")
-    rn = raster_dataset_name.strip()
-    if not rn:
-        raise RuntimeError("raster_dataset_name 不能为空")
+    rn = validate_output_name(raster_dataset_name, "raster_dataset_name")
     arcpy.management.MosaicToNewRaster(
         ";".join(ins), ol, rn, number_of_bands=int(number_of_bands), pixel_type=pixel_type
     )

@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+*.esriAddInX binary
+*.gif binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.png binary
+*.zip binary

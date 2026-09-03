@@ -90,6 +90,39 @@ class ServerToolTests(unittest.TestCase):
         self.assertEqual(first[2], r"C:\\work\\live.aprx")
         arcgis_project.assert_not_called()
 
+    def test_release_project_requires_destructive_gate_and_exact_path_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            project_path = Path(root, "cached.aprx")
+            project_path.touch()
+            cache_key = server._project_cache_key(str(project_path))
+            server._PROJECT_CACHE[cache_key] = object()
+            with patch.dict(
+                os.environ,
+                {
+                    "ARCGIS_PRO_MCP_PROJECT_ROOTS": root,
+                    "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "破坏性操作已禁用"):
+                    server.arcgis_pro_release_project(str(project_path), str(project_path))
+            with patch.dict(
+                os.environ,
+                {
+                    "ARCGIS_PRO_MCP_PROJECT_ROOTS": root,
+                    "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+                    "ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE": "1",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "完全一致"):
+                    server.arcgis_pro_release_project(str(project_path), str(project_path).upper())
+                payload = json.loads(
+                    server.arcgis_pro_release_project(str(project_path), str(project_path))
+                )
+            self.assertTrue(payload["released"])
+            self.assertNotIn(cache_key, server._PROJECT_CACHE)
+
     def test_duplicate_layer_names_require_long_name_or_uri(self) -> None:
         first = SimpleNamespace(name="Roads", longName=r"Group A\Roads", URI="layer://a")
         second = SimpleNamespace(name="Roads", longName=r"Group B\Roads", URI="layer://b")
@@ -413,7 +446,14 @@ class ServerToolTests(unittest.TestCase):
         remove_join = MagicMock()
         fake_arcpy = SimpleNamespace(management=SimpleNamespace(RemoveJoin=remove_join))
 
-        with patch.dict(os.environ, {"ARCGIS_PRO_MCP_ALLOW_WRITE": "1"}, clear=True), patch.object(
+        with patch.dict(
+            os.environ,
+            {
+                "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+                "ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE": "1",
+            },
+            clear=True,
+        ), patch.object(
             server,
             "_open_project",
             return_value=(fake_arcpy, object(), "/tmp/demo.aprx"),
@@ -423,7 +463,13 @@ class ServerToolTests(unittest.TestCase):
             return_value="layer",
         ):
             payload = json.loads(
-                server.arcgis_pro_remove_join("/tmp/demo.aprx", "Map", "Layer", "join_1")
+                server.arcgis_pro_remove_join(
+                    "/tmp/demo.aprx",
+                    "Map",
+                    "Layer",
+                    "join_1",
+                    "join_1",
+                )
             )
 
         remove_join.assert_called_once_with("layer", "join_1")
@@ -576,6 +622,20 @@ class ServerToolTests(unittest.TestCase):
         view.getLayerExtent.assert_called_once_with(layer, True, True)
         camera.setExtent.assert_called_once_with(extent)
 
+    def test_clip_map_layers_uses_outline_layer(self) -> None:
+        layer = SimpleNamespace(name="420100_武汉市")
+        active_map = SimpleNamespace(name="地图", clipLayers=MagicMock())
+        view = SimpleNamespace(map=active_map, camera=object())
+        project = SimpleNamespace(activeView=view)
+        with patch.dict(os.environ, {"ARCGIS_PRO_MCP_ALLOW_WRITE": "1"}, clear=True), patch.object(
+            server,
+            "_open_project",
+            return_value=(object(), project, r"C:\\live.aprx"),
+        ), patch.object(server, "_find_layer", return_value=layer):
+            payload = json.loads(server.arcgis_pro_clip_map_layers("CURRENT", "420100_武汉市"))
+        self.assertTrue(payload["clipped"])
+        active_map.clipLayers.assert_called_once_with(layer, "ALL")
+
     def test_refresh_layer_requests_pro_redraw(self) -> None:
         refresh = MagicMock()
         fake_arcpy = SimpleNamespace(RefreshLayer=refresh)
@@ -614,8 +674,9 @@ class ServerToolTests(unittest.TestCase):
             {
                 "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
                 "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
-                "DB_USER": "gis_user",
-                "DB_PASS": "secret_pass",
+                "ARCGIS_PRO_MCP_DB_INSTANCE_ALLOWLIST": "SQL_SERVER|db-instance",
+                "ARCGIS_PRO_MCP_DB_USERNAME": "gis_user",
+                "ARCGIS_PRO_MCP_DB_PASSWORD": "secret_pass",
             },
             clear=True,
         ), patch.object(server, "_arcpy", return_value=fake_arcpy):
@@ -626,8 +687,6 @@ class ServerToolTests(unittest.TestCase):
                     "SQL_SERVER",
                     "db-instance",
                     authentication="DATABASE_AUTH",
-                    username_env_var="DB_USER",
-                    password_env_var="DB_PASS",
                 )
             )
 
@@ -635,5 +694,66 @@ class ServerToolTests(unittest.TestCase):
         _, kwargs = create_connection.call_args
         self.assertEqual(kwargs["username"], "gis_user")
         self.assertEqual(kwargs["password"], "secret_pass")
-        self.assertEqual(payload["username_source"], "env")
-        self.assertEqual(payload["password_source"], "env")
+        self.assertEqual(kwargs["save_user_pass"], "DO_NOT_SAVE_USERNAME")
+        self.assertEqual(payload["username_source"], "fixed_env")
+        self.assertEqual(payload["password_source"], "fixed_env")
+        self.assertFalse(payload["credentials_saved"])
+
+    def test_create_db_connection_requires_exact_target_allowlist(self) -> None:
+        fake_arcpy = SimpleNamespace(
+            management=SimpleNamespace(CreateDatabaseConnection=MagicMock())
+        )
+        with tempfile.TemporaryDirectory() as output_root, patch.dict(
+            os.environ,
+            {
+                "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+                "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
+                "ARCGIS_PRO_MCP_DB_INSTANCE_ALLOWLIST": "SQL_SERVER|approved",
+                "ARCGIS_PRO_MCP_DB_USERNAME": "gis_user",
+                "ARCGIS_PRO_MCP_DB_PASSWORD": "secret_pass",
+            },
+            clear=True,
+        ), patch.object(server, "_arcpy", return_value=fake_arcpy):
+            with self.assertRaisesRegex(RuntimeError, "精确白名单"):
+                server.arcgis_pro_create_db_connection(
+                    output_root,
+                    "blocked",
+                    "SQL_SERVER",
+                    "attacker.example",
+                )
+        fake_arcpy.management.CreateDatabaseConnection.assert_not_called()
+
+    def test_create_db_connection_refuses_existing_output_and_unconfirmed_secret_storage(self) -> None:
+        fake_arcpy = SimpleNamespace(
+            management=SimpleNamespace(CreateDatabaseConnection=MagicMock())
+        )
+        with tempfile.TemporaryDirectory() as output_root, patch.dict(
+            os.environ,
+            {
+                "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+                "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
+                "ARCGIS_PRO_MCP_DB_INSTANCE_ALLOWLIST": "SQL_SERVER|approved",
+                "ARCGIS_PRO_MCP_DB_USERNAME": "gis_user",
+                "ARCGIS_PRO_MCP_DB_PASSWORD": "secret_pass",
+            },
+            clear=True,
+        ), patch.object(server, "_arcpy", return_value=fake_arcpy):
+            existing = Path(output_root, "existing.sde")
+            existing.write_bytes(b"keep")
+            with self.assertRaisesRegex(RuntimeError, "拒绝隐式覆盖"):
+                server.arcgis_pro_create_db_connection(
+                    output_root,
+                    "existing",
+                    "SQL_SERVER",
+                    "approved",
+                )
+            with self.assertRaisesRegex(RuntimeError, "confirm_save_credentials"):
+                server.arcgis_pro_create_db_connection(
+                    output_root,
+                    "new",
+                    "SQL_SERVER",
+                    "approved",
+                    save_credentials=True,
+                )
+            self.assertEqual(existing.read_bytes(), b"keep")
+        fake_arcpy.management.CreateDatabaseConnection.assert_not_called()

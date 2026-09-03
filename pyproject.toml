@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arcgis-pro-mcp"
-version = "1.0.1"
-description = "MCP server for ArcGIS Pro using ArcPy (.aprx maps, layouts, layers)"
+version = "2.0.0"
+description = "Policy-constrained MCP control for ArcGIS Pro files and live windows"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

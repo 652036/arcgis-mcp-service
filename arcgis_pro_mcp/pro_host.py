@@ -1,6 +1,7 @@
 """在 ArcGIS Pro Python 窗口中运行，把 MCP 接到当前工程。"""
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import os
@@ -15,6 +16,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 
 def _ensure_import_path() -> None:
@@ -33,6 +35,10 @@ def _ensure_import_path() -> None:
 _ensure_import_path()
 
 from arcgis_pro_mcp import __version__ as PACKAGE_VERSION  # noqa: E402
+from arcgis_pro_mcp.private_state import (  # noqa: E402
+    remove_private_json_if,
+    write_private_json,
+)
 from arcgis_pro_mcp.pro_attach import (  # noqa: E402
     DEFAULT_PORT,
     ENV_IN_HOST,
@@ -45,9 +51,12 @@ from arcgis_pro_mcp.pro_attach import (  # noqa: E402
     state_path,
 )
 from arcgis_pro_mcp.pro_attach import ENV_PORT as ENV_PORT  # noqa: E402
+from arcgis_pro_mcp.redaction import safe_error  # noqa: E402
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_QUEUE_SIZE = 32
+JOB_RETENTION_SECONDS = 3600
+MAX_RETAINED_JOBS = 256
 _MISSING = object()
 _LIVE_LOCK = threading.Lock()
 _LIVE: dict[str, Any] = {
@@ -64,6 +73,10 @@ _LIVE: dict[str, Any] = {
     "last_error": None,
     "last_started_at": None,
     "last_finished_at": None,
+    "context_revision": 0,
+    "last_context_change_at": None,
+    "event_source": "python_poll",
+    "draw_complete_supported": False,
 }
 
 
@@ -167,6 +180,43 @@ def _active_view_snapshot(project: Any) -> dict[str, Any] | None:
     if view_map is not None and hasattr(view, "camera"):
         out["type"] = "MAP_VIEW"
         out["map_name"] = str(getattr(view_map, "name", ""))
+        camera = getattr(view, "camera", None)
+        if camera is not None:
+            for attr in ("scale", "heading", "pitch", "roll"):
+                value = getattr(camera, attr, None)
+                if value is not None:
+                    out[attr] = value
+            try:
+                extent = camera.getExtent()
+                out["extent"] = {
+                    "xmin": float(extent.XMin),
+                    "ymin": float(extent.YMin),
+                    "xmax": float(extent.XMax),
+                    "ymax": float(extent.YMax),
+                }
+            except Exception:  # noqa: BLE001
+                pass
+        selections: list[dict[str, Any]] = []
+        try:
+            for layer in view_map.listLayers():
+                try:
+                    selected = layer.getSelectionSet()
+                except Exception:  # noqa: BLE001
+                    continue
+                if selected:
+                    selections.append(
+                        {
+                            "name": str(getattr(layer, "name", "")),
+                            "uri": str(getattr(layer, "URI", "") or ""),
+                            "count": len(selected),
+                            "oid_digest": __import__("hashlib").sha256(
+                                json.dumps(sorted(int(value) for value in selected)).encode("utf-8")
+                            ).hexdigest(),
+                        }
+                    )
+        except Exception:  # noqa: BLE001
+            pass
+        out["selections"] = selections
     elif hasattr(view, "listElements"):
         out["type"] = "LAYOUT_VIEW"
     else:
@@ -182,6 +232,12 @@ def _refresh_live_context() -> None:
         project, project_path = _current_project()
         active_view = _active_view_snapshot(project)
         with _LIVE_LOCK:
+            before = (
+                _LIVE.get("project"),
+                _LIVE.get("project_is_read_only"),
+                _LIVE.get("active_view"),
+                _LIVE.get("context_error"),
+            )
             _LIVE["project"] = project_path
             _LIVE["project_is_read_only"] = bool(getattr(project, "isReadOnly", False))
             _LIVE["active_view"] = active_view
@@ -190,13 +246,28 @@ def _refresh_live_context() -> None:
                 if _LIVE.get("state") != "BUSY":
                     _LIVE["state"] = "READY"
             _LIVE["context_error"] = None
+            after = (project_path, bool(getattr(project, "isReadOnly", False)), active_view, None)
+            if before != after:
+                _LIVE["context_revision"] = int(_LIVE.get("context_revision", 0)) + 1
+                _LIVE["last_context_change_at"] = time.time()
     except Exception as exc:  # noqa: BLE001
         with _LIVE_LOCK:
+            before = (
+                _LIVE.get("project"),
+                _LIVE.get("project_is_read_only"),
+                _LIVE.get("active_view"),
+                _LIVE.get("context_error"),
+            )
             _LIVE["project"] = None
             _LIVE["project_is_read_only"] = None
             _LIVE["active_view"] = None
             _LIVE["ready"] = False
-            _LIVE["context_error"] = str(exc)[:500]
+            context_error = safe_error(exc, 500)
+            _LIVE["context_error"] = context_error
+            after = (None, None, None, context_error)
+            if before != after:
+                _LIVE["context_revision"] = int(_LIVE.get("context_revision", 0)) + 1
+                _LIVE["last_context_change_at"] = time.time()
 
 
 @contextmanager
@@ -279,13 +350,28 @@ def _invoke_tool(
 
 
 class _Job:
-    def __init__(self, payload: dict[str, Any], request_id: str) -> None:
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        request_id: str,
+        *,
+        asynchronous: bool = False,
+        idempotency_key: str = "",
+    ) -> None:
         self.payload = payload
         self.request_id = request_id
         self.deadline = time.monotonic() + HOST_JOB_TIMEOUT
         self.state = "QUEUED"
         self._state_lock = threading.Lock()
         self.reply: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+        self.asynchronous = asynchronous
+        self.idempotency_key = idempotency_key
+        self.created_at = time.time()
+        self.started_at: float | None = None
+        self.finished_at: float | None = None
+        self.cancel_requested = False
+        self.result: str | None = None
+        self.error: str | None = None
 
     def claim(self) -> bool:
         """Atomically move a queued, non-expired job to RUNNING."""
@@ -294,8 +380,10 @@ class _Job:
                 return False
             if time.monotonic() >= self.deadline:
                 self.state = "CANCELLED"
+                self.finished_at = time.time()
                 return False
             self.state = "RUNNING"
+            self.started_at = time.time()
             return True
 
     def cancel_if_queued(self) -> bool:
@@ -303,11 +391,47 @@ class _Job:
             if self.state != "QUEUED":
                 return False
             self.state = "CANCELLED"
+            self.cancel_requested = True
+            self.finished_at = time.time()
             return True
 
-    def finish(self, state: str) -> None:
+    def request_cancel(self) -> dict[str, Any]:
+        with self._state_lock:
+            self.cancel_requested = True
+            if self.state == "QUEUED":
+                self.state = "CANCELLED"
+                self.finished_at = time.time()
+                return {"cancelled": True, "cancel_supported": True}
+            if self.state == "RUNNING":
+                return {"cancelled": False, "cancel_requested": True, "cancel_supported": False}
+            return {"cancelled": self.state == "CANCELLED", "cancel_supported": False}
+
+    def finish(self, state: str, *, result: str | None = None, error: str | None = None) -> None:
         with self._state_lock:
             self.state = state
+            self.result = result
+            self.error = error
+            self.finished_at = time.time()
+
+    def snapshot(self, *, include_result: bool = True) -> dict[str, Any]:
+        with self._state_lock:
+            data: dict[str, Any] = {
+                "ok": True,
+                "request_id": self.request_id,
+                "state": self.state,
+                "tool": str(self.payload.get("tool") or ""),
+                "asynchronous": self.asynchronous,
+                "created_at": self.created_at,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+                "cancel_requested": self.cancel_requested,
+                "cancel_supported_while_running": False,
+            }
+            if self.error:
+                data["error"] = self.error
+            if include_result and self.result is not None:
+                data["result"] = self.result
+            return data
 
 
 def _write_state(port: int, project: str, session_id: str, token: str, started_at: float) -> None:
@@ -323,30 +447,11 @@ def _write_state(port: int, project: str, session_id: str, token: str, started_a
         "token": token,
         "started_at": started_at,
     }
-    path = Path(state_path())
-    tmp = path.with_name(f"{path.name}.{session_id}.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    try:
-        os.chmod(tmp, 0o600)
-    except OSError:
-        pass
-    os.replace(tmp, path)
+    write_private_json(Path(state_path()), data, temp_tag=session_id)
 
 
 def _clear_state(session_id: str) -> None:
-    path = Path(state_path())
-    tmp = path.with_name(f"{path.name}.{session_id}.tmp")
-    try:
-        tmp.unlink(missing_ok=True)
-    except OSError:
-        pass
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict) or data.get("session_id") != session_id:
-            return
-        path.unlink(missing_ok=True)
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
+    remove_private_json_if(Path(state_path()), "session_id", session_id)
 
 
 def _public_status(jobs: queue.Queue[_Job]) -> dict[str, Any]:
@@ -397,6 +502,10 @@ def _run_host_main() -> None:
                 "last_error": None,
                 "last_started_at": None,
                 "last_finished_at": None,
+                "context_revision": 0,
+                "last_context_change_at": None,
+                "event_source": "python_poll",
+                "draw_complete_supported": False,
             }
         )
     try:
@@ -405,8 +514,83 @@ def _run_host_main() -> None:
         _restore_env_value(ENV_IN_HOST, previous_in_host)
         raise
     jobs: queue.Queue[_Job] = queue.Queue(maxsize=MAX_QUEUE_SIZE)
+    job_registry: dict[str, _Job] = {}
+    idempotency_registry: dict[str, tuple[str, str]] = {}
+    job_registry_lock = threading.RLock()
     stop = threading.Event()
     admission_lock = threading.Lock()
+
+    def prune_jobs() -> None:
+        cutoff = time.time() - JOB_RETENTION_SECONDS
+        with job_registry_lock:
+            expired = [
+                request_id
+                for request_id, item in job_registry.items()
+                if item.finished_at is not None and item.finished_at < cutoff
+            ]
+            for request_id in expired:
+                item = job_registry.pop(request_id, None)
+                if item and item.idempotency_key:
+                    existing = idempotency_registry.get(item.idempotency_key)
+                    if existing and existing[0] == request_id:
+                        idempotency_registry.pop(item.idempotency_key, None)
+            if len(job_registry) <= MAX_RETAINED_JOBS:
+                return
+            terminal = sorted(
+                (
+                    item
+                    for item in job_registry.values()
+                    if item.finished_at is not None
+                ),
+                key=lambda item: item.finished_at or 0,
+            )
+            for item in terminal[: max(0, len(job_registry) - MAX_RETAINED_JOBS)]:
+                job_registry.pop(item.request_id, None)
+                if item.idempotency_key:
+                    existing = idempotency_registry.get(item.idempotency_key)
+                    if existing and existing[0] == item.request_id:
+                        idempotency_registry.pop(item.idempotency_key, None)
+
+    def payload_digest(payload: dict[str, Any]) -> str:
+        stable = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"request_id", "idempotency_key"}
+        }
+        body = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+    def register_job(payload: dict[str, Any], request_id: str, asynchronous: bool) -> tuple[_Job, bool]:
+        prune_jobs()
+        idempotency_key = str(payload.get("idempotency_key") or "").strip()
+        if len(idempotency_key) > 128:
+            raise RuntimeError("idempotency_key 过长")
+        digest = payload_digest(payload)
+        with job_registry_lock:
+            if idempotency_key:
+                existing = idempotency_registry.get(idempotency_key)
+                if existing:
+                    existing_request, existing_digest = existing
+                    if existing_digest != digest:
+                        raise RuntimeError("同一 idempotency_key 对应不同请求")
+                    job = job_registry.get(existing_request)
+                    if job is not None:
+                        return job, False
+            if request_id in job_registry:
+                raise RuntimeError("request_id 已存在")
+            if len(job_registry) >= MAX_RETAINED_JOBS and not any(
+                item.finished_at is not None for item in job_registry.values()
+            ):
+                raise RuntimeError("任务状态仓库已满")
+            # Construct with the historical two-argument shape so embedded Pro
+            # toolboxes and test doubles that replace ``_Job`` keep working.
+            job = _Job(payload, request_id)
+            job.asynchronous = asynchronous
+            job.idempotency_key = idempotency_key
+            job_registry[request_id] = job
+            if idempotency_key:
+                idempotency_registry[idempotency_key] = (request_id, digest)
+            return job, True
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args: object) -> None:
@@ -435,10 +619,58 @@ def _run_host_main() -> None:
         def do_GET(self) -> None:  # noqa: N802
             if not self._authorized():
                 return
-            if self.path.split("?", 1)[0] != "/health":
-                self._send(404, {"ok": False, "error": "not found"})
+            parsed = urlparse(self.path)
+            route = parsed.path
+            if route == "/health":
+                status = _public_status(jobs)
+                with job_registry_lock:
+                    status["retained_job_count"] = len(job_registry)
+                self._send(200, status)
                 return
-            self._send(200, _public_status(jobs))
+            if route.startswith("/jobs/"):
+                request_id = route.removeprefix("/jobs/")[:128]
+                with job_registry_lock:
+                    job = job_registry.get(request_id)
+                if job is None:
+                    self._send(404, {"ok": False, "error": "job not found", "request_id": request_id})
+                    return
+                data = job.snapshot(include_result=True)
+                data.update({"protocol_version": PROTOCOL_VERSION, "session_id": session_id})
+                self._send(200, data)
+                return
+            if route == "/events":
+                query = parse_qs(parsed.query)
+                try:
+                    after_revision = max(0, int((query.get("after_revision") or ["0"])[0]))
+                    timeout_ms = max(0, min(30_000, int((query.get("timeout_ms") or ["30000"])[0])))
+                except ValueError:
+                    self._send(400, {"ok": False, "error": "invalid event query"})
+                    return
+                deadline = time.monotonic() + timeout_ms / 1000
+                while True:
+                    with _LIVE_LOCK:
+                        revision = int(_LIVE.get("context_revision", 0))
+                        snapshot = dict(_LIVE)
+                    if revision > after_revision or stop.is_set() or time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.1)
+                self._send(
+                    200,
+                    {
+                        "ok": True,
+                        "protocol_version": PROTOCOL_VERSION,
+                        "session_id": session_id,
+                        "changed": revision > after_revision,
+                        "revision": revision,
+                        "event_source": snapshot.get("event_source", "python_poll"),
+                        "draw_complete_supported": snapshot.get("draw_complete_supported", False),
+                        "project": snapshot.get("project"),
+                        "active_view": snapshot.get("active_view"),
+                        "last_context_change_at": snapshot.get("last_context_change_at"),
+                    },
+                )
+                return
+            self._send(404, {"ok": False, "error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
             if not self._authorized():
@@ -464,7 +696,7 @@ def _run_host_main() -> None:
                     },
                 )
                 return
-            if route != "/call":
+            if route not in {"/call", "/jobs/submit", "/jobs/cancel"}:
                 self._send(404, {"ok": False, "error": "not found"})
                 return
             if stop.is_set():
@@ -513,11 +745,53 @@ def _run_host_main() -> None:
                     },
                 )
                 return
+            if route == "/jobs/cancel":
+                request_id = str(payload.get("request_id") or "")[:128]
+                with job_registry_lock:
+                    existing_job = job_registry.get(request_id)
+                if existing_job is None:
+                    self._send(
+                        404,
+                        {"ok": False, "error": "job not found", "request_id": request_id},
+                    )
+                    return
+                outcome = existing_job.request_cancel()
+                data = existing_job.snapshot(include_result=False)
+                data.update(outcome)
+                data.update({"protocol_version": PROTOCOL_VERSION, "session_id": session_id})
+                self._send(200, data)
+                return
             request_id = str(payload.get("request_id") or "")[:128]
             if not request_id:
                 self._send(400, {"ok": False, "error": "missing request_id"})
                 return
-            job = _Job(payload, request_id)
+            try:
+                job, newly_registered = register_job(
+                    payload,
+                    request_id,
+                    asynchronous=route == "/jobs/submit",
+                )
+            except RuntimeError as ex:
+                self._send(
+                    409,
+                    {
+                        "ok": False,
+                        "error": safe_error(ex, 1000),
+                        "request_id": request_id,
+                    },
+                )
+                return
+            if not newly_registered:
+                data = job.snapshot(include_result=True)
+                data.update(
+                    {
+                        "protocol_version": PROTOCOL_VERSION,
+                        "session_id": session_id,
+                        "idempotent_replay": True,
+                    }
+                )
+                self._send(200, data)
+                return
             queue_full = False
             with admission_lock:
                 if stop.is_set():
@@ -528,7 +802,16 @@ def _run_host_main() -> None:
                 except queue.Full:
                     queue_full = True
             if queue_full:
+                with job_registry_lock:
+                    job_registry.pop(request_id, None)
+                    if job.idempotency_key:
+                        idempotency_registry.pop(job.idempotency_key, None)
                 self._send(429, {"ok": False, "error": "窗口宿主队列已满"})
+                return
+            if route == "/jobs/submit":
+                data = job.snapshot(include_result=False)
+                data.update({"protocol_version": PROTOCOL_VERSION, "session_id": session_id})
+                self._send(202, data)
                 return
             try:
                 result = job.reply.get(timeout=HOST_JOB_TIMEOUT)
@@ -716,7 +999,7 @@ def _run_host_main() -> None:
                 with _LIVE_LOCK:
                     _LIVE["completed_calls"] = int(_LIVE["completed_calls"]) + 1
                     _LIVE["last_error"] = None
-                job.finish("SUCCEEDED")
+                job.finish("SUCCEEDED", result=result)
                 job.reply.put(
                     {
                         "ok": True,
@@ -728,7 +1011,7 @@ def _run_host_main() -> None:
                 )
             except BaseException as exc:  # noqa: BLE001
                 fatal = not isinstance(exc, Exception)
-                detail = str(exc).strip()
+                detail = safe_error(str(exc).strip(), 4000)
                 error_message = detail or type(exc).__name__
                 if fatal:
                     error_message = "窗口宿主执行被中断；任务结果可能未知，不要自动重试"
@@ -737,7 +1020,7 @@ def _run_host_main() -> None:
                 with _LIVE_LOCK:
                     _LIVE["failed_calls"] = int(_LIVE["failed_calls"]) + 1
                     _LIVE["last_error"] = error_message[:1000]
-                job.finish("FAILED")
+                job.finish("FAILED", error=error_message)
                 job.reply.put_nowait(
                     {
                         "ok": False,

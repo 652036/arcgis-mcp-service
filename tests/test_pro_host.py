@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import sys
 import tempfile
@@ -82,8 +81,8 @@ class ProHostTests(unittest.TestCase):
     def test_clear_state_only_removes_own_session(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "state.json"
-            path.write_text(json.dumps({"session_id": "new"}), encoding="utf-8")
             with patch.object(pro_host, "state_path", return_value=str(path)):
+                pro_host._write_state(17865, r"C:\current.aprx", "new", "secret", 1.0)
                 pro_host._clear_state("old")
                 self.assertTrue(path.exists())
                 pro_host._clear_state("new")
@@ -109,7 +108,11 @@ class ProHostTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             with (
                 patch.dict(os.environ, {}, clear=False),
-                patch.object(pro_attach.tempfile, "gettempdir", return_value=root),
+                patch.object(
+                    pro_attach,
+                    "default_state_directory",
+                    return_value=Path(root),
+                ),
             ):
                 os.environ.pop(pro_attach.ENV_PORT, None)
                 default_path = pro_attach.state_path()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import os
 import sys
 import threading
@@ -121,6 +122,28 @@ def _assert_repo_generation(repo_root: Path) -> None:
             )
 
 
+def _require_compatible_fastmcp() -> str:
+    """Fail with an actionable error before importing the large tool registry."""
+    try:
+        module = importlib.import_module("mcp.server.fastmcp")
+        if not hasattr(module, "FastMCP"):
+            raise ImportError("FastMCP symbol is missing")
+    except Exception as exc:  # noqa: BLE001
+        try:
+            installed = importlib.metadata.version("mcp")
+        except importlib.metadata.PackageNotFoundError:
+            installed = "not installed"
+        raise RuntimeError(
+            "ArcGIS Pro Python 中缺少兼容的 FastMCP。当前 mcp 版本："
+            f"{installed}。请在 ArcGIS Pro 的可写克隆环境中执行 "
+            f"{sys.executable!r} -m pip install 'mcp>=1.20,<2'，然后重启 Pro。"
+        ) from exc
+    try:
+        return importlib.metadata.version("mcp")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 def _load_fresh_host_unlocked(repo_root: str | os.PathLike[str]) -> ModuleType:
     """Replace all cached package modules and return a clean ``pro_host`` module."""
     _require_stopped_host()
@@ -138,6 +161,7 @@ def _load_fresh_host_unlocked(repo_root: str | os.PathLike[str]) -> ModuleType:
         importlib.import_module(_PACKAGE_NAME)
         importlib.import_module(f"{_PACKAGE_NAME}.pro_attach")
         pro_host = importlib.import_module(f"{_PACKAGE_NAME}.pro_host")
+        _require_compatible_fastmcp()
         # Build a fresh FastMCP manager and all registered helper imports now,
         # before accepting a live-window request.  Do not import __main__ here:
         # that is the stdio entry point which installs the forwarding proxy.

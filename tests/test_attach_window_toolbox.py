@@ -302,6 +302,38 @@ class AttachWindowEntryTests(unittest.TestCase):
 
 
 class BootstrapSafetyTests(unittest.TestCase):
+    def test_incompatible_fastmcp_has_actionable_version_error(self) -> None:
+        with (
+            patch.object(
+                bootstrap.importlib,
+                "import_module",
+                side_effect=ModuleNotFoundError("mcp.server.fastmcp"),
+            ),
+            patch.object(
+                bootstrap.importlib.metadata,
+                "version",
+                return_value="2.1.1",
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, r"mcp>=1\.20,<2"):
+                bootstrap._require_compatible_fastmcp()
+
+    def test_compatible_fastmcp_returns_distribution_version(self) -> None:
+        compatible = types.SimpleNamespace(FastMCP=object)
+        with (
+            patch.object(
+                bootstrap.importlib,
+                "import_module",
+                return_value=compatible,
+            ),
+            patch.object(
+                bootstrap.importlib.metadata,
+                "version",
+                return_value="1.21.0",
+            ),
+        ):
+            self.assertEqual(bootstrap._require_compatible_fastmcp(), "1.21.0")
+
     def test_active_host_marker_rejects_refresh_before_cache_purge(self) -> None:
         with (
             patch.dict(os.environ, {"ARCGIS_PRO_MCP_IN_PRO_HOST": "1"}, clear=False),

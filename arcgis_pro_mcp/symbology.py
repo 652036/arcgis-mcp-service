@@ -5,9 +5,11 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from arcgis_pro_mcp.arcade import validate_safe_arcade_expression
 from arcgis_pro_mcp.paths import (
+    require_allow_cim_write,
     require_allow_write,
-    validate_output_in_export_root,
+    validate_new_output_in_export_root,
 )
 
 
@@ -124,7 +126,7 @@ def set_heatmap_renderer(
     map_obj: Any,
     layer: Any,
 ) -> None:
-    require_allow_write()
+    require_allow_cim_write()
     _require_feature_layer(layer, "热力图渲染")
     desc = arcpy.Describe(layer)
     shape = str(getattr(desc, "shapeType", "") or "")
@@ -146,6 +148,234 @@ def set_heatmap_renderer(
     layer.setDefinition(cim)
 
 
+def _color_ramp(project: Any, name: str, index: int = 0) -> Any:
+    value = (name or "").strip()
+    if not value or len(value) > 200 or "\r" in value or "\n" in value:
+        raise RuntimeError("color_ramp_name 无效")
+    ramps = list(project.listColorRamps(value))
+    position = int(index)
+    if position < 0 or position >= len(ramps):
+        raise RuntimeError(
+            f"color ramp {value!r} 的 index={position} 不存在；匹配数={len(ramps)}"
+        )
+    return ramps[position]
+
+
+def symbology_info(layer: Any, max_items: int = 100) -> dict[str, Any]:
+    """Return a renderer or raster-colorizer snapshot without raw CIM."""
+    cap = max(1, min(int(max_items), 500))
+    sym = layer.symbology
+    target = getattr(sym, "renderer", None)
+    kind = "renderer"
+    if target is None:
+        target = getattr(sym, "colorizer", None)
+        kind = "colorizer"
+    if target is None:
+        raise RuntimeError("该图层不公开 renderer 或 colorizer")
+    payload: dict[str, Any] = {
+        "kind": kind,
+        "type": getattr(target, "type", type(target).__name__),
+    }
+    for name in (
+        "fields",
+        "field",
+        "classificationField",
+        "classificationMethod",
+        "breakCount",
+        "lowerBound",
+        "stretchType",
+        "band",
+        "gamma",
+        "invertColorRamp",
+        "minPercent",
+        "maxPercent",
+        "standardDeviation",
+    ):
+        try:
+            payload[name] = getattr(target, name)
+        except Exception:  # noqa: BLE001
+            pass
+    ramp = getattr(target, "colorRamp", None)
+    if ramp is not None:
+        payload["color_ramp"] = getattr(ramp, "name", None)
+    breaks = []
+    for item in list(getattr(target, "classBreaks", None) or [])[:cap]:
+        row = {}
+        for name in ("upperBound", "label", "description"):
+            try:
+                row[name] = getattr(item, name)
+            except Exception:  # noqa: BLE001
+                pass
+        breaks.append(row)
+    if breaks:
+        payload["class_breaks"] = breaks
+    groups = []
+    remaining = cap
+    for group in getattr(target, "groups", None) or []:
+        rows = []
+        for item in list(getattr(group, "items", None) or [])[:remaining]:
+            rows.append(
+                {
+                    "values": list(getattr(item, "values", None) or []),
+                    "label": getattr(item, "label", None),
+                    "description": getattr(item, "description", None),
+                }
+            )
+        groups.append({"heading": getattr(group, "heading", None), "items": rows})
+        remaining -= len(rows)
+        if remaining <= 0:
+            break
+    if groups:
+        payload["groups"] = groups
+    return payload
+
+
+def set_raster_stretch_colorizer(
+    project: Any,
+    layer: Any,
+    *,
+    stretch_type: str = "MinimumMaximum",
+    band: int = 0,
+    gamma: float = 1.0,
+    invert_color_ramp: bool = False,
+    min_percent: float = 0.0,
+    max_percent: float = 0.0,
+    standard_deviation: float = 2.0,
+    color_ramp_name: str = "",
+    color_ramp_index: int = 0,
+) -> dict[str, Any]:
+    require_allow_write()
+    sym = layer.symbology
+    if not hasattr(sym, "updateColorizer"):
+        raise RuntimeError("当前图层不支持 raster colorizer")
+    sym.updateColorizer("RasterStretchColorizer")
+    colorizer = sym.colorizer
+    allowed = {
+        "Custom",
+        "Esri",
+        "HistogramEqualize",
+        "HistogramSpecification",
+        "MinimumMaximum",
+        "None",
+        "PercentClip",
+        "StandardDeviation",
+    }
+    stretch = (stretch_type or "MinimumMaximum").strip()
+    if stretch not in allowed:
+        raise RuntimeError(f"stretch_type 须为 {sorted(allowed)}")
+    if int(band) < 0:
+        raise RuntimeError("band 必须 >= 0")
+    if float(gamma) <= 0:
+        raise RuntimeError("gamma 必须 > 0")
+    for label, value in (("min_percent", min_percent), ("max_percent", max_percent)):
+        if float(value) < 0 or float(value) > 100:
+            raise RuntimeError(f"{label} 必须在 0–100 之间")
+    if float(standard_deviation) <= 0:
+        raise RuntimeError("standard_deviation 必须 > 0")
+    colorizer.stretchType = stretch
+    colorizer.band = int(band)
+    colorizer.gamma = float(gamma)
+    colorizer.invertColorRamp = bool(invert_color_ramp)
+    colorizer.minPercent = float(min_percent)
+    colorizer.maxPercent = float(max_percent)
+    colorizer.standardDeviation = float(standard_deviation)
+    if color_ramp_name:
+        colorizer.colorRamp = _color_ramp(project, color_ramp_name, color_ramp_index)
+    layer.symbology = sym
+    return symbology_info(layer)
+
+
+def set_raster_classify_colorizer(
+    project: Any,
+    layer: Any,
+    classification_field: str,
+    *,
+    break_count: int = 5,
+    classification_method: str = "NaturalBreaks",
+    color_ramp_name: str = "",
+    color_ramp_index: int = 0,
+) -> dict[str, Any]:
+    require_allow_write()
+    field = (classification_field or "").strip()
+    if not field or len(field) > 256 or "\r" in field or "\n" in field:
+        raise RuntimeError("classification_field 无效")
+    count = int(break_count)
+    if count < 2 or count > 64:
+        raise RuntimeError("break_count 必须在 2–64 之间")
+    allowed = {
+        "DefinedInterval",
+        "EqualInterval",
+        "GeometricInterval",
+        "ManualInterval",
+        "NaturalBreaks",
+        "Quantile",
+        "StandardDeviation",
+    }
+    method = (classification_method or "NaturalBreaks").strip()
+    if method not in allowed:
+        raise RuntimeError(f"classification_method 须为 {sorted(allowed)}")
+    sym = layer.symbology
+    if not hasattr(sym, "updateColorizer"):
+        raise RuntimeError("当前图层不支持 raster colorizer")
+    sym.updateColorizer("RasterClassifyColorizer")
+    colorizer = sym.colorizer
+    colorizer.classificationField = field
+    colorizer.breakCount = count
+    colorizer.classificationMethod = method
+    if color_ramp_name:
+        colorizer.colorRamp = _color_ramp(project, color_ramp_name, color_ramp_index)
+    layer.symbology = sym
+    return symbology_info(layer)
+
+
+def set_raster_unique_value_colorizer(
+    project: Any,
+    layer: Any,
+    field: str,
+    *,
+    color_ramp_name: str = "",
+    color_ramp_index: int = 0,
+) -> dict[str, Any]:
+    require_allow_write()
+    value = (field or "").strip()
+    if not value or len(value) > 256 or "\r" in value or "\n" in value:
+        raise RuntimeError("field 无效")
+    sym = layer.symbology
+    if not hasattr(sym, "updateColorizer"):
+        raise RuntimeError("当前图层不支持 raster colorizer")
+    sym.updateColorizer("RasterUniqueValueColorizer")
+    colorizer = sym.colorizer
+    colorizer.field = value
+    if color_ramp_name:
+        colorizer.colorRamp = _color_ramp(project, color_ramp_name, color_ramp_index)
+    layer.symbology = sym
+    return symbology_info(layer)
+
+
+def apply_gallery_symbol(layer: Any, wildcard: str, index: int = 0) -> dict[str, Any]:
+    require_allow_write()
+    value = (wildcard or "").strip()
+    if not value or len(value) > 200 or "\r" in value or "\n" in value:
+        raise RuntimeError("wildcard 无效")
+    position = int(index)
+    if position < 0 or position > 10_000:
+        raise RuntimeError("index 无效")
+    sym = layer.symbology
+    renderer = getattr(sym, "renderer", None)
+    symbol = getattr(renderer, "symbol", None)
+    if symbol is None or not hasattr(symbol, "applySymbolFromGallery"):
+        raise RuntimeError("仅支持具有单一 renderer.symbol 的图层；请先设置 SimpleRenderer")
+    symbol.applySymbolFromGallery(value, position)
+    renderer.symbol = symbol
+    layer.symbology = sym
+    return {
+        "renderer_type": getattr(renderer, "type", type(renderer).__name__),
+        "symbol_name": getattr(symbol, "name", None),
+        "wildcard": value,
+        "index": position,
+    }
+
+
 def update_label_expression(
     arcpy: Any,
     layer: Any,
@@ -153,13 +383,12 @@ def update_label_expression(
     label_class_name: str = "",
     expression_engine: str = "Arcade",
 ) -> None:
-    require_allow_write()
-    expr = expression.strip()
-    if not expr:
-        raise RuntimeError("expression 不能为空")
-    ee = expression_engine.strip()
-    if ee not in ("Arcade", "Python", "VBScript"):
-        raise RuntimeError("expression_engine 须为 Arcade、Python 或 VBScript")
+    require_allow_cim_write()
+    expr = validate_safe_arcade_expression(expression)
+    ee = expression_engine.strip().upper()
+    if ee != "ARCADE":
+        raise RuntimeError("expression_engine 仅允许 Arcade；Python/VBScript 不通过 MCP 暴露")
+    ee = "Arcade"
     lbl_cls_list = layer.listLabelClasses()
     lcn = label_class_name.strip()
     if lcn:
@@ -197,7 +426,7 @@ def set_label_font(
     italic: bool | None = None,
     label_class_name: str = "",
 ) -> None:
-    require_allow_write()
+    require_allow_cim_write()
     if not any([font_name, font_size, font_color, bold is not None, italic is not None]):
         raise RuntimeError("至少提供一个字体属性")
     lbl_cls_list = layer.listLabelClasses()
@@ -228,35 +457,43 @@ def set_label_font(
         if target_names and getattr(lcim, "name", "") not in target_names:
             continue
         ts = getattr(lcim, "textSymbol", None)
-        symbol = getattr(ts, "symbol", None) if ts is not None else None
-        layers = getattr(symbol, "symbolLayers", None) if symbol is not None else None
-        if not layers:
+        if ts is None:
             raise RuntimeError("标注类没有可用的 CIM 文本符号，无法设置字体")
-        text_layer = layers[0]
         if font_name:
-            if hasattr(text_layer, "fontFamilyName"):
-                text_layer.fontFamilyName = font_name.strip()
-            elif hasattr(text_layer, "fontName"):
-                text_layer.fontName = font_name.strip()
-        if font_size is not None and hasattr(text_layer, "height"):
-            text_layer.height = float(font_size)
-        if bold is not None and hasattr(text_layer, "fontStyleName"):
-            style = str(getattr(text_layer, "fontStyleName", "") or "")
+            if hasattr(ts, "fontFamilyName"):
+                ts.fontFamilyName = font_name.strip()
+            elif hasattr(ts, "fontName"):
+                ts.fontName = font_name.strip()
+            else:
+                raise RuntimeError("当前 CIMTextSymbol 不支持字体名称")
+        if font_size is not None:
+            if not hasattr(ts, "height"):
+                raise RuntimeError("当前 CIMTextSymbol 不支持字体大小")
+            ts.height = float(font_size)
+        if bold is not None and hasattr(ts, "fontStyleName"):
+            style = str(getattr(ts, "fontStyleName", "") or "")
             lowered = style.lower()
             if bold and "bold" not in lowered:
-                text_layer.fontStyleName = ("Bold Italic" if italic or "italic" in lowered else "Bold")
+                ts.fontStyleName = "Bold Italic" if italic or "italic" in lowered else "Bold"
             if not bold:
-                text_layer.fontStyleName = ("Italic" if italic or "italic" in lowered else "Regular")
-        if italic is not None and hasattr(text_layer, "fontStyleName") and bold is None:
-            style = str(getattr(text_layer, "fontStyleName", "") or "")
+                ts.fontStyleName = "Italic" if italic or "italic" in lowered else "Regular"
+        if italic is not None and hasattr(ts, "fontStyleName") and bold is None:
+            style = str(getattr(ts, "fontStyleName", "") or "")
             if italic and "italic" not in style.lower():
-                text_layer.fontStyleName = ("Bold Italic" if "bold" in style.lower() else "Italic")
+                ts.fontStyleName = "Bold Italic" if "bold" in style.lower() else "Italic"
             if not italic and "italic" in style.lower():
-                text_layer.fontStyleName = ("Bold" if "bold" in style.lower() else "Regular")
-        if rgb is not None and hasattr(text_layer, "color"):
-            color = getattr(text_layer, "color", None)
-            if color is not None and hasattr(color, "values"):
-                color.values = rgb + [100]
+                ts.fontStyleName = "Bold" if "bold" in style.lower() else "Regular"
+        if rgb is not None:
+            symbol = getattr(ts, "symbol", None)
+            layers = getattr(symbol, "symbolLayers", None) if symbol is not None else None
+            color_layer = next(
+                (item for item in list(layers or []) if hasattr(item, "color")),
+                None,
+            )
+            color = getattr(color_layer, "color", None) if color_layer is not None else None
+            if color is None or not hasattr(color, "values"):
+                raise RuntimeError("当前 CIMTextSymbol 没有可写颜色的符号层")
+            color.values = rgb + [100]
         applied += 1
     if applied == 0:
         raise RuntimeError("没有可更新的标注类")
@@ -270,7 +507,7 @@ def export_report_pdf(
     output_pdf_path: str,
 ) -> None:
     require_allow_write()
-    out = validate_output_in_export_root(output_pdf_path, "output_pdf_path")
+    out = validate_new_output_in_export_root(output_pdf_path, "output_pdf_path")
     if not out.lower().endswith(".pdf"):
         raise RuntimeError("output_pdf_path 应以 .pdf 结尾")
     if not hasattr(project, "listReports"):
@@ -298,7 +535,7 @@ def export_map_to_image(
     resolution_dpi: int = 96,
 ) -> str:
     require_allow_write()
-    out = validate_output_in_export_root(output_path, "output_path")
+    out = validate_new_output_in_export_root(output_path, "output_path")
     parent = os.path.dirname(out)
     if parent:
         os.makedirs(parent, exist_ok=True)

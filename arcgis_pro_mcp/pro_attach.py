@@ -3,28 +3,36 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from arcgis_pro_mcp import __version__ as PACKAGE_VERSION
+from arcgis_pro_mcp.private_state import default_state_directory, read_private_json
 
 ENV_IN_HOST = "ARCGIS_PRO_MCP_IN_PRO_HOST"
 ENV_PORT = "ARCGIS_PRO_MCP_HOST_PORT"
 DEFAULT_PORT = 17865
 STATE_NAME = "arcgis-pro-mcp-host.json"
 SERVICE_NAME = "arcgis-pro-mcp-window-host"
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 TOKEN_HEADER = "X-ArcGIS-Pro-MCP-Token"
 HEALTH_TIMEOUT = 0.6
 HOST_JOB_TIMEOUT = 300
 CALL_TIMEOUT = HOST_JOB_TIMEOUT + 10
 FORWARDED_ENV_KEYS = (
     "ARCGIS_PRO_MCP_ALLOW_WRITE",
+    "ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE",
+    "ARCGIS_PRO_MCP_ALLOW_CIM_WRITE",
+    "ARCGIS_PRO_MCP_ALLOW_PUBLISH",
+    "ARCGIS_PRO_MCP_ALLOW_PUBLIC_SHARE",
+    "ARCGIS_PRO_MCP_ALLOW_PUBLISH_OVERWRITE",
+    "ARCGIS_PRO_MCP_ALLOW_ENTERPRISE_WRITE",
     "ARCGIS_PRO_MCP_EXPORT_ROOT",
     "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT",
     "ARCGIS_PRO_MCP_INPUT_ROOTS",
@@ -32,6 +40,8 @@ FORWARDED_ENV_KEYS = (
     "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP",
     "ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST",
     "ARCGIS_PRO_MCP_ALLOW_INLINE_DB_PASSWORD",
+    "ARCGIS_PRO_MCP_PORTAL_ALLOWLIST",
+    "ARCGIS_PRO_MCP_SERVER_ALLOWLIST",
 )
 
 
@@ -55,19 +65,11 @@ def state_path() -> str:
         name = f"{stem}-{configured_port}{suffix}"
     else:
         name = STATE_NAME
-    return os.path.join(tempfile.gettempdir(), name)
+    return str(default_state_directory() / name)
 
 
 def read_state() -> dict[str, Any]:
-    path = state_path()
-    if not os.path.isfile(path):
-        return {}
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.loads(f.read())
-    except Exception:  # noqa: BLE001
-        return {}
-    return data if isinstance(data, dict) else {}
+    return read_private_json(Path(state_path()))
 
 
 @dataclass(frozen=True)
@@ -354,6 +356,173 @@ def host_call(
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
+def _validated_job_response(
+    data: dict[str, Any],
+    snapshot: dict[str, Any],
+    request_id: str = "",
+) -> dict[str, Any]:
+    if data.get("protocol_version") != PROTOCOL_VERSION:
+        raise RuntimeError("窗口宿主任务协议版本不匹配；请重启 MCP 客户端和窗口宿主")
+    if data.get("session_id") != snapshot.get("session_id"):
+        raise RuntimeError("窗口宿主会话在任务请求期间发生变化")
+    if request_id and data.get("request_id") != request_id:
+        raise RuntimeError("窗口宿主任务 request_id 不匹配")
+    if not data.get("ok"):
+        raise RuntimeError(str(data.get("error") or "窗口宿主任务请求失败"))
+    result = data.get("result")
+    if isinstance(result, str):
+        try:
+            data["result"] = json.loads(result)
+        except json.JSONDecodeError:
+            pass
+    return data
+
+
+def submit_host_job(
+    tool_name: str,
+    arguments: dict[str, Any],
+    idempotency_key: str = "",
+    host_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    snapshot = host_snapshot or host_health()
+    if not snapshot or not snapshot.get("ok"):
+        raise RuntimeError("ArcGIS Pro 窗口宿主未连接或协议不匹配")
+    _require_confirmed_target(snapshot)
+    if not should_forward_to_host(arguments):
+        raise RuntimeError("异步窗口任务只接受 arguments.aprx_path=CURRENT")
+    request_id = uuid.uuid4().hex
+    payload = json.dumps(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": request_id,
+            "idempotency_key": idempotency_key,
+            "session_id": snapshot.get("session_id"),
+            "expected_project": snapshot.get("project"),
+            "tool": tool_name,
+            "arguments": arguments,
+            "environment": forwarded_environment(),
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    endpoint = _endpoint_snapshot()
+    base = str(snapshot.get("_endpoint_base") or endpoint.base)
+    token = str(snapshot.get("_endpoint_token") or endpoint.token)
+    req = urllib.request.Request(
+        base + "/jobs/submit",
+        data=payload,
+        method="POST",
+        headers=_request_headers(json_body=True, token=token),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = _read_json_response(response)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"窗口任务提交失败：{_http_error_message(exc)}") from exc
+    except (TimeoutError, urllib.error.URLError) as exc:
+        raise RuntimeError(f"无法提交窗口任务：{exc}") from exc
+    returned_request_id = str(data.get("request_id") or "")
+    if returned_request_id != request_id and data.get("idempotent_replay") is not True:
+        raise RuntimeError("窗口宿主任务 request_id 不匹配")
+    if returned_request_id != request_id and not idempotency_key:
+        raise RuntimeError("窗口宿主返回了未经请求的幂等重放")
+    return _validated_job_response(data, snapshot)
+
+
+def host_job_status(
+    request_id: str,
+    host_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    rid = request_id.strip()
+    if not rid or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for char in rid):
+        raise RuntimeError("request_id 格式无效")
+    snapshot = host_snapshot or host_health()
+    if not snapshot or not snapshot.get("ok"):
+        raise RuntimeError("ArcGIS Pro 窗口宿主未连接")
+    _require_confirmed_target(snapshot)
+    endpoint = _endpoint_snapshot()
+    base = str(snapshot.get("_endpoint_base") or endpoint.base)
+    token = str(snapshot.get("_endpoint_token") or endpoint.token)
+    req = urllib.request.Request(
+        base + "/jobs/" + urllib.parse.quote(rid, safe=""),
+        method="GET",
+        headers=_request_headers(json_body=False, token=token),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = _read_json_response(response)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"读取窗口任务失败：{_http_error_message(exc)}") from exc
+    except (TimeoutError, urllib.error.URLError) as exc:
+        raise RuntimeError(f"无法读取窗口任务：{exc}") from exc
+    return _validated_job_response(data, snapshot, rid)
+
+
+def cancel_host_job(
+    request_id: str,
+    host_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    rid = request_id.strip()
+    snapshot = host_snapshot or host_health()
+    if not snapshot or not snapshot.get("ok"):
+        raise RuntimeError("ArcGIS Pro 窗口宿主未连接")
+    _require_confirmed_target(snapshot)
+    payload = json.dumps(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "session_id": snapshot.get("session_id"),
+            "request_id": rid,
+        }
+    ).encode("utf-8")
+    endpoint = _endpoint_snapshot()
+    base = str(snapshot.get("_endpoint_base") or endpoint.base)
+    token = str(snapshot.get("_endpoint_token") or endpoint.token)
+    req = urllib.request.Request(
+        base + "/jobs/cancel",
+        data=payload,
+        method="POST",
+        headers=_request_headers(json_body=True, token=token),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = _read_json_response(response)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"取消窗口任务失败：{_http_error_message(exc)}") from exc
+    except (TimeoutError, urllib.error.URLError) as exc:
+        raise RuntimeError(f"无法取消窗口任务：{exc}") from exc
+    return _validated_job_response(data, snapshot, rid)
+
+
+def wait_for_window_change(
+    after_revision: int,
+    timeout_ms: int = 30_000,
+    host_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    snapshot = host_snapshot or host_health()
+    if not snapshot or not snapshot.get("ok"):
+        raise RuntimeError("ArcGIS Pro 窗口宿主未连接")
+    _require_confirmed_target(snapshot)
+    wait_ms = max(0, min(int(timeout_ms), 30_000))
+    query = urllib.parse.urlencode(
+        {"after_revision": max(0, int(after_revision)), "timeout_ms": wait_ms}
+    )
+    endpoint = _endpoint_snapshot()
+    base = str(snapshot.get("_endpoint_base") or endpoint.base)
+    token = str(snapshot.get("_endpoint_token") or endpoint.token)
+    req = urllib.request.Request(
+        base + "/events?" + query,
+        method="GET",
+        headers=_request_headers(json_body=False, token=token),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=wait_ms / 1000 + 5) as response:
+            data = _read_json_response(response)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"等待窗口变化失败：{_http_error_message(exc)}") from exc
+    except (TimeoutError, urllib.error.URLError) as exc:
+        raise RuntimeError(f"无法等待窗口变化：{exc}") from exc
+    return _validated_job_response(data, snapshot)
+
+
 def stop_host(host_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
     """Ask the attached in-Pro host to stop after its current call."""
     endpoint = _endpoint_snapshot()
@@ -413,7 +582,16 @@ def install_stdio_proxy(mcp: Any) -> int:
                             "请在 Pro 中启动 接入当前窗口.py，或改用绝对 .aprx 路径进入文件模式"
                             f"{detail}"
                         )
-                    return host_call(tool_name, kwargs, health)
+                    remote_result = host_call(tool_name, kwargs, health)
+                    if getattr(original, "__arcgis_structured_output__", False):
+                        if isinstance(remote_result, str):
+                            try:
+                                decoded = json.loads(remote_result)
+                            except json.JSONDecodeError:
+                                return {"ok": True, "result": remote_result}
+                            return decoded if isinstance(decoded, dict) else {"ok": True, "result": decoded}
+                        return remote_result
+                    return remote_result
                 return original(**kwargs)
 
             proxy.__name__ = getattr(original, "__name__", tool_name)

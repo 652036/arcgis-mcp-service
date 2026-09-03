@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -10,6 +11,7 @@ from arcgis_pro_mcp.paths import (
     require_gp_output_root_mandatory,
     validate_gp_output_path,
     validate_input_path_optional,
+    validate_output_name,
 )
 
 _GEOMETRY_TYPES = frozenset({"POINT", "MULTIPOINT", "POLYLINE", "POLYGON"})
@@ -26,9 +28,7 @@ def run_create_feature_class(
     require_allow_write()
     require_gp_output_root_mandatory()
     op = validate_gp_output_path(out_path, "out_path")
-    on = out_name.strip()
-    if not on:
-        raise RuntimeError("out_name 不能为空")
+    on = validate_output_name(out_name, "out_name")
     gt = geometry_type.strip().upper()
     if gt not in _GEOMETRY_TYPES:
         raise RuntimeError(f"geometry_type 须为 {sorted(_GEOMETRY_TYPES)}")
@@ -39,7 +39,7 @@ def run_create_feature_class(
         arcpy.management.CreateFeatureclass(op, on, gt, spatial_reference=sr)
     else:
         arcpy.management.CreateFeatureclass(op, on, gt)
-    return f"{op}\\{on}"
+    return validate_gp_output_path(os.path.join(op, on), "output")
 
 
 def run_create_table(
@@ -50,11 +50,9 @@ def run_create_table(
     require_allow_write()
     require_gp_output_root_mandatory()
     op = validate_gp_output_path(out_path, "out_path")
-    on = out_name.strip()
-    if not on:
-        raise RuntimeError("out_name 不能为空")
+    on = validate_output_name(out_name, "out_name")
     arcpy.management.CreateTable(op, on)
-    return f"{op}\\{on}"
+    return validate_gp_output_path(os.path.join(op, on), "output")
 
 
 def run_create_file_gdb(
@@ -65,13 +63,11 @@ def run_create_file_gdb(
     require_allow_write()
     require_gp_output_root_mandatory()
     ofp = validate_gp_output_path(out_folder_path, "out_folder_path")
-    on = out_name.strip()
-    if not on:
-        raise RuntimeError("out_name 不能为空")
+    on = validate_output_name(out_name, "out_name")
     if not on.lower().endswith(".gdb"):
         on += ".gdb"
     arcpy.management.CreateFileGDB(ofp, on)
-    return f"{ofp}\\{on}"
+    return validate_gp_output_path(os.path.join(ofp, on), "output")
 
 
 def run_create_feature_dataset(
@@ -83,12 +79,10 @@ def run_create_feature_dataset(
     require_allow_write()
     require_gp_output_root_mandatory()
     odp = validate_gp_output_path(out_dataset_path, "out_dataset_path")
-    on = out_name.strip()
-    if not on:
-        raise RuntimeError("out_name 不能为空")
+    on = validate_output_name(out_name, "out_name")
     sr = arcpy.SpatialReference(int(spatial_reference_wkid))
     arcpy.management.CreateFeatureDataset(odp, on, sr)
-    return f"{odp}\\{on}"
+    return validate_gp_output_path(os.path.join(odp, on), "output")
 
 
 def run_copy_feature_class(
@@ -110,9 +104,7 @@ def run_rename_dataset(
 ) -> None:
     require_allow_write()
     ind = validate_input_path_optional(in_data, "in_data")
-    od = out_data.strip()
-    if not od:
-        raise RuntimeError("out_data 不能为空")
+    od = validate_output_name(out_data, "out_data")
     arcpy.management.Rename(ind, od)
 
 

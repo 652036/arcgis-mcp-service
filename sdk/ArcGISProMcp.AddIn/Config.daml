@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ArcGIS
+  defaultAssembly="ArcGISProMcp.AddIn.dll"
+  defaultNamespace="ArcGISProMcp.AddIn"
+  xmlns="http://schemas.esri.com/DADF/Registry"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://schemas.esri.com/DADF/Registry file:///C:/Program%20Files/ArcGIS/Pro/bin/ArcGIS.Desktop.Framework.xsd">
+  <AddInInfo id="{6D183DC0-8D96-4A0D-A3CE-D7B7BE4C3625}" version="2.0.0" desktopVersion="3.6.0">
+    <Name>ArcGIS Pro MCP Bridge</Name>
+    <Description>Authenticated loopback bridge for controlled ArcGIS Pro SDK automation.</Description>
+    <Author>ArcGIS Pro MCP contributors</Author>
+    <Company>ArcGIS Pro MCP</Company>
+    <Date>2026-09-03</Date>
+    <Subject>Framework; Editing; Geoprocessing; Map Exploration</Subject>
+  </AddInInfo>
+  <modules>
+    <insertModule
+      id="ArcGISProMcp_AddIn_Module"
+      className="McpBridgeModule"
+      autoLoad="true"
+      caption="ArcGIS Pro MCP Bridge" />
+  </modules>
+</ArcGIS>

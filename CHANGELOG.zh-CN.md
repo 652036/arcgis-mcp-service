@@ -6,7 +6,22 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-03
+
 ### 新增
+- 新增第三种可选原生控制面 `sdk/ArcGISProMcp.AddIn`：仅 loopback 发现、
+  每次加载随机凭据、独占短工程租约、活动上下文 generations、仅元数据事件、
+  相机/时间/表窗格命令、可确认 DrawComplete 的刷新、原生 `EditOperation`
+  要素写入、Undo/Redo/保存/丢弃，以及可取消的 typed GP 作业。Python MCP
+  封装不会向模型暴露 bearer 或 lease secret。
+- 受控 MCP 工具面扩展到 400+，并改为运行时动态编目。新增聚焦模块覆盖工程
+  导入/导出与连接修复、制图与图表、数据集/方案维护、属性完整性、符号系统、
+  栅格/地图代数/水文/镶嵌、LAS、高级空间与时空建模、本地地理编码、本地网络
+  分析、企业版本化、Utility Network 工作流和受门禁保护的发布。
+- 新增 `arcgis_pro_tool_info` 和机器可读的逐工具策略目录，无需依赖静态工具数，
+  即可查询读写分类、路径根、窗口要求、确认参数和附加门禁。
+- 新增 Python 实时窗口 job 提交/状态/取消与有界变化等待，同时保持精确
+  `CURRENT` 目标绑定。
 - 窗口接入：运行 `接入当前窗口.pyt` 或在 ArcGIS Pro Python 窗口运行
   `接入当前窗口.py` 后，显式使用 `aprx_path=CURRENT` 的调用在当前工程执行。
   新增活动视图状态、打开/关闭地图与布局视图、实时范围/图层缩放和图层刷新工具。
@@ -32,14 +47,31 @@
   而不是裸异常堆栈。
 
 ### 修复
+- 收紧独立通用 GP 与 CURRENT 地图分析：每次调用必须在已配置的 GP 输出根下
+  创建至少一个完整目标路径；两者拒绝已有目标并强制 `overwriteOutput=False`。
+  即使工具已在 allowlist 中，输出容器/名称分离、原地或无输出、破坏性和代码
+  执行类操作仍会被拒绝。
+- Calculate Field 仅接受经校验的纯 Arcade 表达式子集，标注表达式仅允许
+  Arcade，不再暴露 Python/VB/code block 执行路径。Repair Geometry 固定使用
+  `KEEP_NULL`，不会把删除空几何记录当作修复副作用。
+- 地图、布局、报表、图表、工程副本以及本地发布草稿/服务定义导出现在会拒绝
+  已存在路径，不再继承 ArcPy 的覆盖状态。
+- Python CURRENT 发现状态迁移到当前用户私有的
+  `%LOCALAPPDATA%\ArcGISProMcp\window-host`，使用原子发布、受保护 ACL/所有者
+  校验、有界读取，并拒绝链接/reparse point。
+- 创建数据库连接现在只允许精确白名单实例并只读取固定专用凭据变量，禁止由调用方
+  指定任意环境变量或把凭据发送到任意目标；新连接文件拒绝覆盖，且默认不保存凭据。
+- 镶嵌数据集 `OVERWRITE_DUPLICATES`，以及可能丢弃未保存缓存状态的文件模式工程
+  release/reload，现在都要求破坏性门禁和相应精确确认。
 - 选择写操作现在会将 ArcPy 派生计数与图层真实 `getSelectionSet()` 交叉核验后再
   报告成功，在实时窗口中主动请求重绘，并返回准确的选择数量/FID。图层属性改为
   检查 `Symbology.renderer` 或 `Symbology.colorizer`，不再访问不存在的
   `Symbology.type`。这修复了 Issue #6 中的假成功、窗口未同步、计数错误和符号系统报错。
 - 窗口入口不再只刷新 `pro_host`、却继续沿用 ArcGIS Pro 进程内的旧模块缓存。
   现在由包外 bootstrap 在旧宿主停止后整代替换 `arcgis_pro_mcp.*`，避免新版宿主
-  混用旧版 `pro_attach`、辅助模块或 FastMCP 工具注册。
-- 窗口宿主不再强制开启写入或硬编码 `E:\arcgis`；它按调用沿用 stdio MCP 的
+  混用旧版 `pro_attach`、辅助模块或 FastMCP 工具注册，并修复旧代模块导致的
+  `FORWARDED_ENV_KEYS` 导入失败。
+- 窗口宿主不再强制开启写入或硬编码本机驱动器路径；它按调用沿用 stdio MCP 的
   allowlist 安全策略。绝对 `.aprx` 不再被静默改写为 `CURRENT`，CURRENT 失联或
   工程切换时会失败关闭。每个窗口请求只使用一个绑定的 CURRENT 工程引用。
 - `arcgis_pro_list_projects` 在未配置工程/输入根目录时改为返回空清单与说明，不再抛错。
@@ -57,6 +89,11 @@
   （`.csv`/`.txt`/`.tab`），并使用语义更清晰的 `in_csv` 参数名。
 
 ### 变更
+- 统一并澄清门禁元数据：enterprise-write 仅保护版本管理、维护和 Utility
+  Network 管理；普通要素/行编辑使用 WRITE，并在适用时叠加 destructive 与
+  SDK feature gate。
+- 围绕三个显式执行面重写或更新 README、实时窗口架构、贡献指南、安全文档和
+  共享 Agent skill：文件模式、Python `CURRENT` 协议 v4、SDK Add-In。
 - skill 现同时面向 Cursor、Grok、Codex、Claude，并新增 Pro 3.6 运行时说明
   `skills/arcgis-pro-mcp/references/runtime-notes.md`。
 - 将 `mcp` 依赖收紧为 `>=1.20,<2`，避免未来主版本变更导致悄悄断裂。

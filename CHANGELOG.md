@@ -6,7 +6,26 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-03
+
 ### Added
+- Added a third, optional native control surface under
+  `sdk/ArcGISProMcp.AddIn`: loopback-only discovery, per-load credentials,
+  exclusive short project leases, active context generations, metadata-only
+  events, camera/time/table commands, DrawComplete-aware refresh, native
+  `EditOperation` feature writes, Undo/Redo/save/discard, and cancellable typed
+  GP jobs. Python MCP wrappers keep bearer and lease secrets opaque.
+- Expanded the curated MCP surface to more than 400 dynamically catalogued
+  tools. New focused modules cover project import/export and connection repair,
+  cartography and charts, dataset/schema maintenance, attribute integrity,
+  symbology, raster/map algebra/hydrology/mosaics, LAS, advanced spatial and
+  space-time modelling, local geocoding, local network analysis, enterprise
+  versioning, Utility Network workflows, and guarded publishing.
+- Added `arcgis_pro_tool_info` and a machine-readable per-tool policy catalogue
+  to report read/write classification, path roots, window requirements,
+  confirmations, and additional gates without relying on a static tool count.
+- Added Python live-window job submission/status/cancellation and bounded change
+  waiting, while preserving exact `CURRENT` target binding.
 - Window attach host: run `接入当前窗口.pyt` or `接入当前窗口.py` inside ArcGIS Pro.
   Calls that explicitly use `aprx_path=CURRENT` execute against the open project.
   New tools inspect/focus active views, control the live map camera, and request
@@ -40,6 +59,26 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
   failures print a readable message instead of a bare traceback.
 
 ### Fixed
+- Hardened standalone generic GP and CURRENT map analysis so every call must
+  create at least one complete path under the configured GP output root. Both
+  reject existing targets and force `overwriteOutput=False`; ambiguous
+  container/name outputs, in-place/no-output work, destructive operations, and
+  code-execution tools are denied even when a name is allowlisted.
+- Restricted Calculate Field to a validated pure-Arcade expression subset and
+  label expressions to Arcade, removing Python/VB/code-block execution paths.
+  Repair Geometry now always uses `KEEP_NULL` so null-geometry rows are not
+  deleted as a side effect.
+- Changed map/layout/report/chart/project-copy and local publishing-artifact
+  exports to reject existing paths instead of inheriting ArcPy overwrite state.
+- Moved Python CURRENT discovery state into the current user's private
+  `%LOCALAPPDATA%\ArcGISProMcp\window-host` directory with atomic publication,
+  protected ACL/owner checks, bounded reads, and link/reparse-point rejection.
+- Restricted database-connection creation to exact allowlisted instances and
+  fixed dedicated credential variables, preventing caller-selected environment
+  reads or credential forwarding to arbitrary targets. New connection files
+  reject existing outputs and do not save credentials unless explicitly confirmed.
+- Added a destructive gate for mosaic `OVERWRITE_DUPLICATES`, and for releasing
+  or reloading cached file-mode projects that may contain unsaved state.
 - Selection writes now verify ArcPy's derived count against the layer's actual
   `getSelectionSet()` before reporting success, request a live-window redraw,
   and expose exact selected counts/FIDs. Layer properties now inspect
@@ -49,8 +88,9 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 - Window launchers no longer reload only `pro_host` while retaining stale ArcGIS Pro
   process caches. A package-external bootstrap now replaces the complete
   `arcgis_pro_mcp.*` module generation after the old host stops, preventing new
-  host code from importing old `pro_attach`, helper, or FastMCP registrations.
-- The Pro host no longer force-enables writes or hardcodes `E:\arcgis`; it applies
+  host code from importing old `pro_attach`, helper, or FastMCP registrations,
+  including the stale-generation `FORWARDED_ENV_KEYS` import failure.
+- The Pro host no longer force-enables writes or hardcodes a local drive path; it applies
   the stdio MCP client's allowlisted policy per call. Absolute `.aprx` paths are no
   longer rewritten to CURRENT, and CURRENT fails closed on disconnect or project
   switch. Each host request reuses one bound CURRENT project reference.
@@ -76,6 +116,14 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
   (`.csv`/`.txt`/`.tab`) and uses the clearer `in_csv` parameter name.
 
 ### Changed
+- Clarified and aligned gate metadata so enterprise-write permission protects
+  version management, maintenance, and Utility Network administration, while
+  ordinary feature/row edits use WRITE plus destructive and SDK-feature gates
+  where applicable.
+- Reworked the README, live-window architecture guide, contributor guidance,
+  security documentation, and shared agent skill around the three explicit
+  execution surfaces: file mode, Python `CURRENT` protocol v4, and the SDK
+  Add-In.
 - Expanded the repo skill for Cursor, Grok, Codex, and Claude, and added
   Pro 3.6 live-runtime notes under `skills/arcgis-pro-mcp/references/runtime-notes.md`.
 - Pinned the `mcp` dependency to `>=1.20,<2` to avoid silent breakage on a
