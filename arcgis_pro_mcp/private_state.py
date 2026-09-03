@@ -119,6 +119,11 @@ def _set_windows_private_acl(path: Path) -> None:
         ctypes.POINTER(wintypes.DWORD),
     ]
     advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+    advapi32.ConvertStringSidToSidW.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    advapi32.ConvertStringSidToSidW.restype = wintypes.BOOL
     advapi32.GetSecurityDescriptorDacl.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(wintypes.BOOL),
@@ -140,6 +145,7 @@ def _set_windows_private_acl(path: Path) -> None:
     kernel32.LocalFree.restype = wintypes.HLOCAL
 
     descriptor = ctypes.c_void_p()
+    owner = ctypes.c_void_p()
     if not advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
         sddl,
         1,
@@ -148,6 +154,8 @@ def _set_windows_private_acl(path: Path) -> None:
     ):
         raise OSError(ctypes.get_last_error(), "无法创建私有 Windows DACL")
     try:
+        if not advapi32.ConvertStringSidToSidW(sid, ctypes.byref(owner)):
+            raise OSError(ctypes.get_last_error(), "无法创建当前 Windows 用户 SID")
         present = wintypes.BOOL()
         defaulted = wintypes.BOOL()
         dacl = ctypes.c_void_p()
@@ -158,13 +166,14 @@ def _set_windows_private_acl(path: Path) -> None:
             ctypes.byref(defaulted),
         ) or not present.value:
             raise OSError(ctypes.get_last_error(), "无法读取私有 Windows DACL")
+        owner_information = 0x00000001
         dacl_information = 0x00000004
         protected_dacl_information = 0x80000000
         status = advapi32.SetNamedSecurityInfoW(
             str(path),
             1,
-            dacl_information | protected_dacl_information,
-            None,
+            owner_information | dacl_information | protected_dacl_information,
+            owner,
             None,
             dacl,
             None,
@@ -172,6 +181,8 @@ def _set_windows_private_acl(path: Path) -> None:
         if status:
             raise OSError(int(status), "无法设置私有 Windows DACL")
     finally:
+        if owner:
+            kernel32.LocalFree(owner)
         kernel32.LocalFree(descriptor)
 
 

@@ -47,6 +47,9 @@
   而不是裸异常堆栈。
 
 ### 修复
+- Windows ACL 初始化现在会同时显式设置受保护 DACL 与当前用户 owner；在管理员
+  或托管 runner 默认把新对象 owner 设为 Administrators 时，仍保持私有发现状态
+  的严格失败关闭校验。
 - 收紧独立通用 GP 与 CURRENT 地图分析：每次调用必须在已配置的 GP 输出根下
   创建至少一个完整目标路径；两者拒绝已有目标并强制 `overwriteOutput=False`。
   即使工具已在 allowlist 中，输出容器/名称分离、原地或无输出、破坏性和代码

@@ -59,6 +59,9 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
   failures print a readable message instead of a bare traceback.
 
 ### Fixed
+- Windows ACL setup now assigns both the protected DACL and the current-user
+  owner explicitly. This preserves fail-closed private discovery on elevated or
+  hosted-runner accounts whose new objects otherwise inherit Administrators as owner.
 - Hardened standalone generic GP and CURRENT map analysis so every call must
   create at least one complete path under the configured GP output root. Both
   reject existing targets and force `overwriteOutput=False`; ambiguous
