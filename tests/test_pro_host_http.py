@@ -78,7 +78,10 @@ def _wait_for_state(path: Path, host_errors: list[BaseException]) -> dict[str, A
             raise AssertionError("window host failed during startup") from host_errors[0]
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError):
+        # Publication is atomic, but Windows can briefly deny a concurrent read
+        # while the final protected ACL/owner is applied. Match read_state's
+        # fail-closed OSError handling and keep polling until the file is ready.
+        except (OSError, json.JSONDecodeError):
             time.sleep(0.01)
             continue
         if isinstance(state, dict):
