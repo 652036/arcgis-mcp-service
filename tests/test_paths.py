@@ -10,6 +10,23 @@ from arcgis_pro_mcp import paths
 
 
 class ProjectPathValidationTests(unittest.TestCase):
+    def test_write_gate_is_enabled_by_default_and_can_be_disabled(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(paths.writes_allowed())
+            paths.require_allow_write()
+
+        with patch.dict(os.environ, {"ARCGIS_PRO_MCP_ALLOW_WRITE": "0"}, clear=True):
+            self.assertFalse(paths.writes_allowed())
+            with self.assertRaisesRegex(RuntimeError, "ALLOW_WRITE"):
+                paths.require_allow_write()
+
+    def test_other_high_impact_gates_remain_disabled_by_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(paths.destructive_allowed())
+            self.assertFalse(paths.cim_write_allowed())
+            self.assertFalse(paths.publish_allowed())
+            self.assertFalse(paths.enterprise_write_allowed())
+
     def test_path_under_root_is_case_insensitive(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             project_dir = Path(root) / "Projects"

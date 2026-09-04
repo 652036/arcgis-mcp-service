@@ -40,6 +40,14 @@ class _Management:
         return call
 
 
+class _RemoveRuleCompatibilityManagement(_Management):
+    def RemoveRuleFromTopology(self, *args: object, **kwargs: object) -> _Result:
+        self.calls.append(("RemoveRuleFromTopology", args, kwargs))
+        if args[1] == "Must Be Disjoint (Point)":
+            raise RuntimeError("ERROR 000800")
+        return _Result()
+
+
 class _Arcpy:
     def __init__(self, *, exists: bool = True, lock: bool = True, count: int = 2) -> None:
         self._exists = exists
@@ -177,9 +185,16 @@ class DatasetManagementTests(unittest.TestCase):
                     require_nonempty=True,
                 )
 
-    def test_domain_write_requires_gate_and_schema_lock(self) -> None:
+    def test_container_schema_writes_defer_lock_but_dataset_writes_require_it(self) -> None:
         with tempfile.TemporaryDirectory() as root:
-            with patch.dict(os.environ, {"ARCGIS_PRO_MCP_INPUT_ROOTS": root}, clear=True):
+            with patch.dict(
+                os.environ,
+                {
+                    "ARCGIS_PRO_MCP_ALLOW_WRITE": "0",
+                    "ARCGIS_PRO_MCP_INPUT_ROOTS": root,
+                },
+                clear=True,
+            ):
                 with self.assertRaisesRegex(RuntimeError, "写入类操作已禁用"):
                     dataset_management.run_create_domain(
                         _Arcpy(), root, "Status", "Status values", "TEXT"
@@ -192,9 +207,17 @@ class DatasetManagementTests(unittest.TestCase):
                 },
                 clear=True,
             ):
+                arcpy = _Arcpy(lock=False)
+                dataset_management.run_create_domain(
+                    arcpy, root, "Status", "Status values", "TEXT"
+                )
+                self.assertEqual(arcpy.management.calls[0][0], "CreateDomain")
                 with self.assertRaisesRegex(RuntimeError, "方案锁"):
-                    dataset_management.run_create_domain(
-                        _Arcpy(lock=False), root, "Status", "Status values", "TEXT"
+                    dataset_management.run_assign_domain_to_field(
+                        arcpy,
+                        str(Path(root) / "data.gdb" / "Parcels"),
+                        "STATUS",
+                        "Status",
                     )
 
     def test_domain_and_subtype_helpers_call_named_management_tools(self) -> None:
@@ -371,6 +394,62 @@ class DatasetManagementTests(unittest.TestCase):
             args,
             (os.path.normpath(topology), "Must Not Have Gaps (Area)"),
         )
+        self.assertEqual(kwargs, {})
+
+    def test_remove_topology_rule_retries_arcgis_pro_36_point_token(self) -> None:
+        arcpy = _Arcpy()
+        arcpy.management = _RemoveRuleCompatibilityManagement()
+        with tempfile.TemporaryDirectory() as output_root, patch.dict(
+            os.environ,
+            {
+                "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+                "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
+            },
+            clear=True,
+        ):
+            topology = str(Path(output_root) / "data.gdb" / "PointTopology")
+            dataset_management.run_remove_rule_from_topology(
+                arcpy,
+                topology,
+                "Must Be Disjoint (Point)",
+            )
+        self.assertEqual(
+            arcpy.management.calls,
+            [
+                (
+                    "RemoveRuleFromTopology",
+                    (os.path.normpath(topology), "Must Be Disjoint (Point)"),
+                    {},
+                ),
+                (
+                    "RemoveRuleFromTopology",
+                    (os.path.normpath(topology), "Must Be Disjoint (8)"),
+                    {},
+                ),
+            ],
+        )
+
+    def test_remove_topology_feature_class_uses_participant_name(self) -> None:
+        arcpy = _Arcpy()
+        with tempfile.TemporaryDirectory() as output_root, tempfile.TemporaryDirectory() as input_root, patch.dict(
+            os.environ,
+            {
+                "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+                "ARCGIS_PRO_MCP_INPUT_ROOTS": input_root,
+                "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
+            },
+            clear=True,
+        ):
+            topology = str(Path(output_root) / "data.gdb" / "PointTopology")
+            feature_class = str(Path(input_root) / "data.gdb" / "PointFeatures")
+            dataset_management.run_remove_feature_class_from_topology(
+                arcpy,
+                topology,
+                feature_class,
+            )
+        name, args, kwargs = arcpy.management.calls[-1]
+        self.assertEqual(name, "RemoveFeatureClassFromTopology")
+        self.assertEqual(args, (os.path.normpath(topology), "PointFeatures"))
         self.assertEqual(kwargs, {})
 
 

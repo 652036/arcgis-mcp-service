@@ -39,6 +39,18 @@ def run_add_locations(
     sl = sub_layer.strip()
     if not sl:
         raise RuntimeError("sub_layer 不能为空（如 Stops、Facilities 等）")
+    # GetNAClassNames translates stable semantic keys such as ``Stops`` to
+    # the localized sublayer name used by the current ArcGIS installation.
+    get_class_names = getattr(arcpy.na, "GetNAClassNames", None)
+    if callable(get_class_names):
+        try:
+            names = dict(get_class_names(in_network_analysis_layer) or {})
+            sl = next(
+                (value for key, value in names.items() if str(key).lower() == sl.lower()),
+                sl,
+            )
+        except Exception:  # noqa: BLE001
+            pass
     fm = (field_mappings or "").strip()
     if fm:
         arcpy.na.AddLocations(in_network_analysis_layer, sl, inf, fm)

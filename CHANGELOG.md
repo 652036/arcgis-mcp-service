@@ -6,6 +6,43 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 
 ## [Unreleased]
 
+### Changed
+- Ordinary project, map, and data writes are now enabled when
+  `ARCGIS_PRO_MCP_ALLOW_WRITE` is unset. Set it to `0`, `false`, `no`, or `off`
+  for a read-only deployment. Destructive, CIM, enterprise, publishing, and SDK
+  edit gates remain disabled by default.
+
+### Fixed
+- The ArcGIS Pro toolbox bootstrap now discovers a checkout-local
+  `.arcgis-pro-mcp-deps` FastMCP installation and reports a valid
+  `python.exe -m pip --target` recovery command instead of the invalid
+  `ArcGISPro.exe -m pip` command.
+- `arcgis_pro_close_views` now rejects closing the active view category. Closing
+  the last active map/layout view from the foreground `CURRENT` host could
+  terminate the host or crash ArcGIS Pro 3.6.
+- Fixed ArcGIS Pro 3.6 project and data interoperability: single-layer
+  `insertLayer` returns, empty selections reported as `None`, table selection
+  verification, field-alias schema-lock release, container-level schema-lock
+  false negatives, topology rule removal tokens, and topology participant
+  names are now handled using their observed ArcPy contracts.
+- Fixed ArcGIS Pro 3.6 analysis compatibility for localized Network Analyst
+  sublayer names, locator property/field mappings, integer raster remaps, typed
+  TopoToRaster elevation inputs, and the generated `GenerateTessellation`
+  spatial-reference signature.
+- Spatial Analyst licenses are retained for the MCP host lifetime to avoid an
+  ArcGIS Pro 3.6 process crash when checking a license in immediately after a
+  saved raster result. Other extension licenses continue to be returned after
+  each call.
+- Attribute-rule inventory verification now normalizes the Pro 3.6
+  not-applicable severity sentinel and ignores ArcGIS-managed evaluation-order
+  renumbering without weakening the remaining rule comparison.
+- Label font updates now unwrap Pro 3.6 `CIMSymbolReference` text symbols, and
+  named Utility Network traces use the accepted
+  `USE_TRACE_CONFIGURATION` value.
+- SDK context status no longer fails JSON serialization when a 2D camera
+  reports a non-finite Z value. Context capture also reports a bounded,
+  step-specific error when an ArcGIS SDK accessor fails.
+
 ## [2.0.0] - 2026-09-03
 
 ### Added

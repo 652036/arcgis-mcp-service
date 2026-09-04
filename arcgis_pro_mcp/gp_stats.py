@@ -505,8 +505,8 @@ def run_generate_tessellation(
     tess = getattr(arcpy.management, "GenerateTessellation", None)
     if tess is None:
         raise RuntimeError("当前 ArcGIS Pro 版本不支持 GenerateTessellation（需 Pro 2.1+）")
-    if sz:
-        tess(out, ext, st, sz, sr)
-    else:
-        tess(out, ext, st, spatial_reference=sr)
+    # ArcPy 3.6 exposes the final parameter as ``Spatial_Reference`` rather
+    # than the lower-case keyword accepted by some earlier generated wrappers.
+    # Positional arguments are stable across those generated signatures.
+    tess(out, ext, st, sz, sr)
     return out

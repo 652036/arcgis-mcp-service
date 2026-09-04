@@ -32,8 +32,9 @@ class GeocodingTools:
             locatorType="PointAddress",
             precisionType="GLOBAL_HIGH",
             role="PointAddress",
-            multilineAddressFields=[SimpleNamespace(name="Address")],
-            outputFields=[SimpleNamespace(name="Score")],
+            multilineInputFields=[SimpleNamespace(name="Address")],
+            batchOutputFields=[SimpleNamespace(name="Score")],
+            reverseOutputFields=[SimpleNamespace(name="Match_addr")],
             spatialReference=SimpleNamespace(name="WGS 1984", factoryCode=4326),
         )
 
@@ -88,6 +89,8 @@ class GeocodingTests(unittest.TestCase):
         result = geocoding.locator_info(self.arcpy, self.locator)
         self.assertEqual(result["country_code"], "CHN")
         self.assertEqual(result["multiline_address_fields"], ["Address"])
+        self.assertEqual(result["output_fields"], ["Score"])
+        self.assertEqual(result["reverse_output_fields"], ["Match_addr"])
         self.assertEqual(result["spatial_reference"]["wkid"], 4326)
 
     def test_geocode_uses_typed_field_mapping_and_verifies_output(self):
@@ -102,7 +105,7 @@ class GeocodingTests(unittest.TestCase):
         )
         self.assertTrue(result["output"]["verified"])
         args = self.arcpy.geocoding.calls[-1][1]
-        self.assertEqual(args[2], [["Single Line Input", "Address"]])
+        self.assertEqual(args[2], "'Single Line Input' Address")
         self.assertEqual(args[4], "STATIC")
 
     def test_unknown_input_field_is_rejected_before_gp(self):

@@ -12,6 +12,8 @@ build/
 .pytest_cache/
 .ruff_cache/
 .test-mcp1/
+.arcgis-pro-mcp-deps/
+.codex-sweep/
 
 # ArcGIS Pro SDK build output and installable packages
 sdk/**/bin/

@@ -229,7 +229,8 @@ GP start, GP cancel, and editing command bodies must contain
 
 GP execution is disabled unless all of these are true:
 
-- `ARCGIS_PRO_MCP_ALLOW_WRITE=1`
+- the ordinary write gate is effective (enabled by default; explicitly disabled
+  by `ARCGIS_PRO_MCP_ALLOW_WRITE=0`, `false`, `no`, or `off`)
 - the exact tool is present in `ARCGIS_PRO_MCP_SDK_GP_ALLOWLIST`
 - the tool has one of the built-in typed contracts listed below
 - `ARCGIS_PRO_MCP_INPUT_ROOTS` is non-empty and every typed input path is below it
@@ -301,7 +302,12 @@ lease/project context is invalidated is
 `cancellationRequested`, and `leaseInvalidated` before treating a job as a
 normal success.
 
-Example fail-closed configuration:
+Ordinary SDK reads and writes are enabled by default. Set
+`ARCGIS_PRO_MCP_ALLOW_WRITE=0` (or `false`, `no`, or `off`) to make the bridge
+read-only. The narrower edit-command, discard, feature-edit, destructive, and
+generic-GP gates remain disabled unless they are enabled explicitly.
+
+Example explicitly scoped configuration:
 
 ```text
 ARCGIS_PRO_MCP_ALLOW_WRITE=1
@@ -322,9 +328,8 @@ unset, matching the Python host's project policy.
 
 ## Editing command preconditions
 
-Editing commands are disabled unless both
-`ARCGIS_PRO_MCP_ALLOW_WRITE=1` and
-`ARCGIS_PRO_MCP_SDK_ALLOW_EDIT_COMMANDS=1` are set. First call
+Editing commands are disabled unless the ordinary write gate remains effective
+and `ARCGIS_PRO_MCP_SDK_ALLOW_EDIT_COMMANDS=1` is set. First call
 `GET /v1/edit/status`; its response includes `activeMapUri` and a monotonic
 `editGeneration`. Undo and redo require both values:
 
@@ -346,7 +351,7 @@ on a `409` and refresh status rather than blindly retrying.
 
 ## Native feature edits
 
-Create/modify/delete need both `ARCGIS_PRO_MCP_ALLOW_WRITE=1` and
+Create/modify/delete need the effective ordinary write gate and
 `ARCGIS_PRO_MCP_SDK_ALLOW_FEATURE_EDITS=1`. Delete additionally needs
 `ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE=1` and
 `"confirmDeleteSelection":true`.

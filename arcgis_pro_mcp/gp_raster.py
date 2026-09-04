@@ -70,13 +70,21 @@ def run_reclassify(
     rm = remap.strip()
     if not rm:
         raise RuntimeError("remap 不能为空（如 \"0 10 1;10 20 2;20 30 3\"）")
-    ranges: list[list[float]] = []
+    ranges: list[list[int | float]] = []
     for part in rm.split(";"):
         nums = [p for p in part.replace(",", " ").split() if p]
         if len(nums) != 3:
             raise RuntimeError("remap 每段须为 start end new_value，例如 \"0 10 1;10 20 2\"")
         try:
-            ranges.append([float(nums[0]), float(nums[1]), float(nums[2])])
+            # ArcPy 3.6 rejects floating-point output classes for integer rasters in
+            # some Reclassify workflows.  Preserve integer tokens instead of
+            # eagerly converting every value to float.
+            ranges.append(
+                [
+                    int(value) if value.lstrip("+-").isdigit() else float(value)
+                    for value in nums
+                ]
+            )
         except ValueError as e:
             raise RuntimeError("remap 数值无效") from e
     result = arcpy.sa.Reclassify(inf, rf, arcpy.sa.RemapRange(ranges))
@@ -216,15 +224,21 @@ def run_topo_to_raster(
     in_topo_features: str,
     out_raster: str,
     cell_size: float | None = None,
+    elevation_field: str = "VALUE",
 ) -> None:
     require_allow_write()
     require_gp_output_root_mandatory()
     inf = validate_input_path_optional(in_topo_features, "in_topo_features")
     out = validate_gp_output_path(out_raster, "out_raster")
+    field = elevation_field.strip()
+    if not field:
+        raise RuntimeError("elevation_field 不能为空")
+    topo_input = arcpy.sa.TopoPointElevation([[inf, field]])
     if cell_size:
-        arcpy.ddd.TopoToRaster(inf, out, cell_size)
+        result = arcpy.sa.TopoToRaster([topo_input], float(cell_size), data_type="SPOT")
     else:
-        arcpy.ddd.TopoToRaster(inf, out)
+        result = arcpy.sa.TopoToRaster([topo_input], data_type="SPOT")
+    result.save(out)
 
 
 def run_raster_to_polygon(

@@ -372,7 +372,7 @@ def query_current_layer(
     cap = max(1, min(int(max_rows), 2000))
     selection_count = None
     try:
-        selection_count = len(layer.getSelectionSet())
+        selection_count = len(layer.getSelectionSet() or ())
     except Exception as ex:  # noqa: BLE001
         if selected_only:
             raise RuntimeError("selected_only=true，但无法读取图层选择集") from ex

@@ -378,7 +378,7 @@ class RasterAdvancedTests(unittest.TestCase):
         )
         self.assertEqual(arcpy.sa_calls[0][1][1][0], "NbrAnnulus")
         self.assertEqual(arcpy.extension_events.count(("check", "Spatial")), 4)
-        self.assertEqual(arcpy.extension_events.count(("in", "Spatial")), 4)
+        self.assertEqual(arcpy.extension_events.count(("in", "Spatial")), 0)
 
     def test_distance_path_and_hydrology_operations_verify_secondary_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as input_root, tempfile.TemporaryDirectory() as output_root:

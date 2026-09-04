@@ -45,6 +45,8 @@ Python MCP router
 
 在 ArcGIS Pro 中打开并保存工程，然后运行仓库根目录的 `接入当前窗口.pyt`；也可在 Python 窗口用 `runpy.run_path(...)` 启动 `接入当前窗口.py`。宿主必须保持运行。
 
+启动器会自动把仓库本地 `.arcgis-pro-mcp-deps` 加入 ArcGIS Pro 嵌入式 Python 的导入路径。若缺少 `mcp.server.fastmcp`，用该 ArcGIS Pro 环境的 `python.exe -m pip install --target <仓库>\\.arcgis-pro-mcp-deps "mcp>=1.20,<2"` 安装；不要运行无效的 `ArcGISPro.exe -m pip`。
+
 MCP 侧先调用：
 
 ```text
@@ -79,6 +81,8 @@ arcgis_pro_window_status()
 ### 实时能力与作业
 
 Python 宿主支持当前工程、地图、图层、独立表、布局、报表、活动视图、相机、选择和刷新，并可转发所有明确支持 `CURRENT` 的工程工具。无 `aprx_path` 的纯路径型 DA/GP 工具不会被自动送入宿主。
+
+`arcgis_pro_close_views` 不允许关闭当前活动视图所属类别。真实 Pro 3.6 前台宿主中关闭最后一个活动地图/布局视图可能终止宿主甚至导致 Pro 异常退出；如需关闭地图或布局视图，应先打开并激活报表等不会被该 `view_type` 覆盖的视图。
 
 `arcgis_pro_current_map_run_analysis` 是受控的当前地图 GP 入口，不是任意 GP 执行器。它只接受代码内列出的非破坏性工具和当前图层/表引用；必须配置 GP 输出根，并为每次调用提供完整的 `out_*` 目标路径。输出容器与名称分离、原地/无输出、已有目标、字段计算、几何修复以及其他破坏性/代码执行工具都会被拒绝；执行期固定 `overwriteOutput=False`。字段计算请使用只接受受限纯 Arcade 表达式的专用语义工具。
 
@@ -178,7 +182,7 @@ Add-In 的稳定 HTTP 控制面如下。通常应通过 `arcgis_pro_sdk_*` MCP �
 
 SDK 要素写入同时要求：
 
-- `ARCGIS_PRO_MCP_ALLOW_WRITE=1`
+- 普通写入权限保持启用（默认启用；`ARCGIS_PRO_MCP_ALLOW_WRITE=0` 会关闭）
 - `ARCGIS_PRO_MCP_SDK_ALLOW_FEATURE_EDITS=1`
 - 有效工程租约、最新 generations 和 `confirm=true`
 

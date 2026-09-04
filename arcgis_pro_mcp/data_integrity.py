@@ -195,6 +195,11 @@ def _jsonable(value: Any) -> Any:
 
 
 def _attribute_rule_payload(item: Any) -> dict[str, Any]:
+    severity = _jsonable(_property(item, "severity", default=None))
+    if severity == -1:
+        # ArcGIS Pro 3.6 reports -1 when severity is not applicable to an
+        # immediate calculation/constraint rule.
+        severity = None
     return {
         "id": _jsonable(_property(item, "id", default=None)),
         "name": str(_property(item, "name", default="") or ""),
@@ -226,7 +231,7 @@ def _attribute_rule_payload(item: Any) -> dict[str, Any]:
             )
         ),
         "batch": _jsonable(_property(item, "batch", "isBatch", default=None)),
-        "severity": _jsonable(_property(item, "severity", default=None)),
+        "severity": severity,
         "tags": _jsonable(_property(item, "tags", default=[])),
         "evaluation_order": _jsonable(
             _property(item, "evaluationOrder", "evaluation_order", default=None)
@@ -283,6 +288,20 @@ def _attribute_rules(arcpy: Any, dataset_path: str) -> list[dict[str, Any]]:
     if any(not item["name"] for item in values):
         raise RuntimeError("Describe.attributeRules 返回了缺少名称的规则")
     return sorted(values, key=lambda item: item["name"].casefold())
+
+
+def _same_rule_inventory(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> bool:
+    """Compare rules while ignoring ArcGIS-managed evaluation-order renumbering."""
+
+    def stable(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result = []
+        for value in values:
+            item = dict(value)
+            item.pop("evaluation_order", None)
+            result.append(item)
+        return result
+
+    return stable(left) == stable(right)
 
 
 def list_attribute_rules(arcpy: Any, dataset_path: str) -> dict[str, Any]:
@@ -553,7 +572,10 @@ def import_attribute_rules(
             "ImportAttributeRules 已返回，但新增规则集合与 expected_rule_names 不一致；"
             "不要自动重试"
         )
-    if [item for item in after if item["name"].casefold() not in expected_folded] != before:
+    if not _same_rule_inventory(
+        [item for item in after if item["name"].casefold() not in expected_folded],
+        before,
+    ):
         raise RuntimeError("ImportAttributeRules 后既有规则发生变化；不要自动重试")
     return {
         "dataset_path": path,
@@ -670,7 +692,10 @@ def add_attribute_rule(
     matches = [item for item in after if item["name"] == name]
     if len(matches) != 1:
         raise RuntimeError("AddAttributeRule 已返回但无法验证新规则；不要自动重试")
-    if [item for item in after if item["name"] != name] != before:
+    if not _same_rule_inventory(
+        [item for item in after if item["name"] != name],
+        before,
+    ):
         raise RuntimeError("AddAttributeRule 后既有规则发生变化；不要自动重试")
     expected_type = {
         "CALCULATION": "esriARTCalculation",
@@ -723,7 +748,7 @@ def delete_attribute_rules(
     result = _management_tool(arcpy, "DeleteAttributeRule")(path, names, kind)
     after = _attribute_rules(arcpy, path)
     expected_after = [item for item in before if item["name"] not in set(names)]
-    if after != expected_after:
+    if not _same_rule_inventory(after, expected_after):
         raise RuntimeError("DeleteAttributeRule 后规则清单与预期差分不一致；不要自动重试")
     return {
         "dataset_path": path,

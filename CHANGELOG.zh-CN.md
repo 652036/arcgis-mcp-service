@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+### 变更
+- 未设置 `ARCGIS_PRO_MCP_ALLOW_WRITE` 时，普通工程、地图和数据写入现在默认启用；
+  设为 `0`、`false`、`no` 或 `off` 可切换为只读。破坏性、CIM、企业维护、发布和
+  SDK 编辑门禁仍默认关闭。
+
+### 修复
+- ArcGIS Pro 工具箱启动器现在会自动发现仓库本地 `.arcgis-pro-mcp-deps` 中的
+  FastMCP，并在依赖缺失时给出有效的 `python.exe -m pip --target` 修复命令，
+  不再错误建议使用 `ArcGISPro.exe -m pip`。
+- `arcgis_pro_close_views` 现在拒绝关闭当前活动视图所属类别；在前台 `CURRENT`
+  宿主中关闭最后一个活动地图/布局视图可能终止宿主或导致 ArcGIS Pro 3.6 崩溃。
+- 修复 ArcGIS Pro 3.6 工程与数据兼容性：正确处理 `insertLayer` 返回单个图层、
+  空选择集返回 `None`、表选择计数核验、字段别名写入前释放方案锁、容器级方案锁
+  假阴性、拓扑规则移除令牌以及拓扑参与者名称。
+- 修复 ArcGIS Pro 3.6 分析兼容性：支持本地化 Network Analyst 子图层名、定位器
+  属性与字段映射、整数栅格重分类、TopoToRaster 类型化高程输入，以及
+  `GenerateTessellation` 生成式包装器的空间参考签名。
+- Spatial Analyst 许可在 MCP 宿主生命周期内保持签出，避免已保存栅格结果后立即
+  `CheckInExtension` 导致 ArcGIS Pro 3.6 进程崩溃；其他扩展许可仍在每次调用后归还。
+- 属性规则清单核验现在会规范化 Pro 3.6 的“不适用”严重性哨兵值，并忽略由 ArcGIS
+  管理的求值顺序重排，同时继续严格比较其余规则属性。
+- 标注字体更新现在会解包 Pro 3.6 的 `CIMSymbolReference` 文本符号；命名 Utility
+  Network Trace 改用受支持的 `USE_TRACE_CONFIGURATION` 值。
+- SDK 上下文状态不再因二维相机返回非有限 Z 值而在 JSON 序列化时失败；ArcGIS
+  SDK 访问器异常现在也会返回有界、精确到捕获步骤的错误。
+
 ## [2.0.0] - 2026-09-03
 
 ### 新增

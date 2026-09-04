@@ -67,7 +67,8 @@ Out of scope:
 
 ## Deployment Rules
 
-- Keep `ARCGIS_PRO_MCP_ALLOW_WRITE=0` until a task actually needs writes.
+- Ordinary writes are enabled by default. Set `ARCGIS_PRO_MCP_ALLOW_WRITE=0`
+  for read-only deployments or whenever a task does not need mutations.
 - Scope `ARCGIS_PRO_MCP_INPUT_ROOTS`, `ARCGIS_PRO_MCP_PROJECT_ROOTS`,
   `ARCGIS_PRO_MCP_EXPORT_ROOT`, and `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` to the
   smallest practical directories. Do not use a drive root as a convenience.

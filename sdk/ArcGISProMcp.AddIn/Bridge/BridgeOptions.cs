@@ -44,7 +44,9 @@ internal sealed class BridgeOptions
 
         return new BridgeOptions
         {
-            AllowWrite = IsEnabled(Environment.GetEnvironmentVariable("ARCGIS_PRO_MCP_ALLOW_WRITE")),
+            AllowWrite = IsEnabled(
+                Environment.GetEnvironmentVariable("ARCGIS_PRO_MCP_ALLOW_WRITE"),
+                defaultValue: true),
             AllowEditCommands = IsEnabled(
                 Environment.GetEnvironmentVariable("ARCGIS_PRO_MCP_SDK_ALLOW_EDIT_COMMANDS")),
             AllowDiscardEdits = IsEnabled(
@@ -63,11 +65,18 @@ internal sealed class BridgeOptions
         };
     }
 
-    private static bool IsEnabled(string? value) =>
-        string.Equals(value, "1", StringComparison.Ordinal) ||
-        string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+    private static bool IsEnabled(string? value, bool defaultValue = false)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return defaultValue;
+        }
+
+        return string.Equals(value, "1", StringComparison.Ordinal) ||
+               string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static IReadOnlySet<string> ParseSet(string? value) =>
         new HashSet<string>(

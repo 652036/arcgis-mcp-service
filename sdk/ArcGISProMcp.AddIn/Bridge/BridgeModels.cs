@@ -57,13 +57,13 @@ internal sealed record ProContextSnapshot(
     long DrawGeneration);
 
 internal sealed record CameraSnapshot(
-    double X,
-    double Y,
-    double Z,
-    double Scale,
-    double Heading,
-    double Pitch,
-    double Roll,
+    double? X,
+    double? Y,
+    double? Z,
+    double? Scale,
+    double? Heading,
+    double? Pitch,
+    double? Roll,
     int SpatialReferenceWkid,
     string? SpatialReferenceName);
 

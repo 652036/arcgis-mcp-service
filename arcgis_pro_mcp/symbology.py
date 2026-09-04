@@ -456,9 +456,15 @@ def set_label_font(
     for lcim in classes:
         if target_names and getattr(lcim, "name", "") not in target_names:
             continue
-        ts = getattr(lcim, "textSymbol", None)
-        if ts is None:
+        text_symbol_reference = getattr(lcim, "textSymbol", None)
+        if text_symbol_reference is None:
             raise RuntimeError("标注类没有可用的 CIM 文本符号，无法设置字体")
+        ts = text_symbol_reference
+        inner_text_symbol = getattr(text_symbol_reference, "symbol", None)
+        if not hasattr(ts, "height") and hasattr(inner_text_symbol, "height"):
+            # ArcGIS Pro 3.6 stores CIMTextSymbol beneath a
+            # CIMSymbolReference; older mocks/builds may expose it directly.
+            ts = inner_text_symbol
         if font_name:
             if hasattr(ts, "fontFamilyName"):
                 ts.fontFamilyName = font_name.strip()

@@ -243,7 +243,10 @@ class NetworkAnalysisTests(unittest.TestCase):
     def test_list_travel_modes_returns_typed_properties(self) -> None:
         with tempfile.TemporaryDirectory() as root, patch.dict(
             os.environ,
-            {"ARCGIS_PRO_MCP_INPUT_ROOTS": root},
+            {
+                "ARCGIS_PRO_MCP_ALLOW_WRITE": "0",
+                "ARCGIS_PRO_MCP_INPUT_ROOTS": root,
+            },
             clear=True,
         ):
             network = str(Path(root) / "network.gdb" / "Streets_ND")
@@ -407,7 +410,10 @@ class NetworkAnalysisTests(unittest.TestCase):
         arcpy = _Arcpy()
         with tempfile.TemporaryDirectory() as root, patch.dict(
             os.environ,
-            {"ARCGIS_PRO_MCP_INPUT_ROOTS": root},
+            {
+                "ARCGIS_PRO_MCP_ALLOW_WRITE": "0",
+                "ARCGIS_PRO_MCP_INPUT_ROOTS": root,
+            },
             clear=True,
         ):
             with self.assertRaisesRegex(RuntimeError, "写入类操作已禁用"):

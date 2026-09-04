@@ -100,14 +100,19 @@ def locator_info(arcpy: Any, locator_path: str) -> dict[str, Any]:
             result[target] = value
         else:
             result[target] = str(value)
-    for source, target in (
-        ("multilineAddressFields", "multiline_address_fields"),
-        ("outputFields", "output_fields"),
+    # ArcGIS Pro 3.6 exposes these as multilineInputFields and
+    # batchOutputFields.  Retain fallbacks for older ArcPy builds.
+    for sources, target in (
+        (("multilineInputFields", "multilineAddressFields"), "multiline_address_fields"),
+        (("batchOutputFields", "outputFields"), "output_fields"),
+        (("reverseOutputFields",), "reverse_output_fields"),
     ):
-        try:
-            result[target] = _field_names(getattr(locator, source))
-        except Exception:  # noqa: BLE001
-            continue
+        for source in sources:
+            try:
+                result[target] = _field_names(getattr(locator, source))
+                break
+            except Exception:  # noqa: BLE001
+                continue
     try:
         result["spatial_reference"] = _spatial_reference(locator.spatialReference)
     except Exception:  # noqa: BLE001
@@ -119,14 +124,14 @@ def _address_field_mapping(
     arcpy: Any,
     in_table: str,
     mappings: list[dict[str, str]],
-) -> list[list[str]]:
+) -> str:
     if not mappings or len(mappings) > 64:
         raise RuntimeError("address_fields 必须为 1–64 项数组")
     available = {
         str(field.name).lower(): str(field.name)
         for field in list(arcpy.ListFields(in_table) or [])
     }
-    result: list[list[str]] = []
+    result: list[str] = []
     seen: set[str] = set()
     for index, item in enumerate(mappings):
         if not isinstance(item, dict) or set(item) != {"locator_field", "table_field"}:
@@ -145,8 +150,18 @@ def _address_field_mapping(
         if locator_field.lower() in seen:
             raise RuntimeError(f"locator_field 重复：{locator_field}")
         seen.add(locator_field.lower())
-        result.append([locator_field, table_field])
-    return result
+        def _field_info_token(value: str) -> str:
+            if any(character.isspace() for character in value):
+                return "'" + value.replace("'", "''") + "'"
+            return value
+
+        result.append(
+            f"{_field_info_token(locator_field)} {_field_info_token(table_field)}"
+        )
+    # ArcGIS Pro 3.6's GeocodeAddresses rejects a Python list-of-lists with
+    # the opaque error "Object: error in executing tool".  Its Field Info
+    # parser reliably accepts the documented semicolon-delimited form.
+    return ";".join(result)
 
 
 def geocode_addresses(

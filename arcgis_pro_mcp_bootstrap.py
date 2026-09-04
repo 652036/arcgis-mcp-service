@@ -15,6 +15,7 @@ _PACKAGE_NAME = "arcgis_pro_mcp"
 _IN_HOST_ENV = "ARCGIS_PRO_MCP_IN_PRO_HOST"
 _PROCESS_STATE_NAME = "_arcgis_pro_mcp_bootstrap_state_v1"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_LOCAL_DEPENDENCY_DIRS = (".arcgis-pro-mcp-deps", ".test-mcp1")
 
 
 def _process_lock() -> threading.Lock:
@@ -71,6 +72,31 @@ def _promote_repo_root(repo_root: Path) -> None:
     sys.path.insert(0, root_text)
 
 
+def _activate_repo_dependencies(repo_root: Path) -> Path | None:
+    """Expose a checkout-local FastMCP install to the embedded Pro interpreter."""
+    for directory_name in _LOCAL_DEPENDENCY_DIRS:
+        dependency_root = (repo_root / directory_name).resolve()
+        fastmcp_package = dependency_root / "mcp" / "server" / "fastmcp"
+        try:
+            available = fastmcp_package.is_dir()
+        except OSError:
+            available = False
+        if not available:
+            continue
+        dependency_text = str(dependency_root)
+        dependency_key = _path_key(dependency_text)
+        sys.path[:] = [
+            entry
+            for entry in sys.path
+            if entry == "" or _path_key(entry) != dependency_key
+        ]
+        # The repository itself remains first so a dependency target cannot
+        # shadow this checkout's arcgis_pro_mcp package.
+        sys.path.insert(1 if sys.path else 0, dependency_text)
+        return dependency_root
+    return None
+
+
 def _package_module_names() -> list[str]:
     prefix = f"{_PACKAGE_NAME}."
     names = [
@@ -122,7 +148,7 @@ def _assert_repo_generation(repo_root: Path) -> None:
             )
 
 
-def _require_compatible_fastmcp() -> str:
+def _require_compatible_fastmcp(repo_root: Path | None = None) -> str:
     """Fail with an actionable error before importing the large tool registry."""
     try:
         module = importlib.import_module("mcp.server.fastmcp")
@@ -133,10 +159,18 @@ def _require_compatible_fastmcp() -> str:
             installed = importlib.metadata.version("mcp")
         except importlib.metadata.PackageNotFoundError:
             installed = "not installed"
+        dependency_target = (
+            (repo_root / _LOCAL_DEPENDENCY_DIRS[0]).resolve()
+            if repo_root is not None
+            else Path(".arcgis-pro-mcp-deps")
+        )
+        environment_python = Path(sys.prefix) / "python.exe"
+        python_executable = environment_python if environment_python.is_file() else Path(sys.executable)
         raise RuntimeError(
             "ArcGIS Pro Python 中缺少兼容的 FastMCP。当前 mcp 版本："
-            f"{installed}。请在 ArcGIS Pro 的可写克隆环境中执行 "
-            f"{sys.executable!r} -m pip install 'mcp>=1.20,<2'，然后重启 Pro。"
+            f"{installed}。请在 PowerShell 中执行 "
+            f"& \"{python_executable}\" -m pip install --target "
+            f"\"{dependency_target}\" \"mcp>=1.20,<2\"，然后重新运行接入工具。"
         ) from exc
     try:
         return importlib.metadata.version("mcp")
@@ -156,12 +190,13 @@ def _load_fresh_host_unlocked(repo_root: str | os.PathLike[str]) -> ModuleType:
     previous_modules = _snapshot_package_modules()
     try:
         _promote_repo_root(root)
+        _activate_repo_dependencies(root)
         importlib.invalidate_caches()
         _remove_package_modules()
         importlib.import_module(_PACKAGE_NAME)
         importlib.import_module(f"{_PACKAGE_NAME}.pro_attach")
         pro_host = importlib.import_module(f"{_PACKAGE_NAME}.pro_host")
-        _require_compatible_fastmcp()
+        _require_compatible_fastmcp(root)
         # Build a fresh FastMCP manager and all registered helper imports now,
         # before accepting a live-window request.  Do not import __main__ here:
         # that is the stdio entry point which installs the forwarding proxy.

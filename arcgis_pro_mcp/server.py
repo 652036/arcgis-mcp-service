@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import os
@@ -1170,7 +1171,9 @@ def arcgis_pro_server_capabilities() -> str:
     return _json_dumps(
         {
             "allow_write": write,
-            "writes_required_env": "ARCGIS_PRO_MCP_ALLOW_WRITE=1",
+            "writes_enabled_by_default": True,
+            "writes_disable_env": "ARCGIS_PRO_MCP_ALLOW_WRITE=0",
+            "writes_required_env": None,
             "allow_destructive": destructive_allowed(),
             "destructive_required_env": "ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE=1",
             "allow_cim_write": cim_write_allowed(),
@@ -2530,7 +2533,14 @@ def arcgis_pro_insert_layer(
     map_obj = _get_map(project, map_name)
     reference = _find_layer(map_obj, reference_layer_name)
     source = _find_layer(map_obj, insert_layer_name)
-    added = list(map_obj.insertLayer(reference, source, position) or [])
+    inserted = map_obj.insertLayer(reference, source, position)
+    if inserted is None:
+        added = []
+    elif isinstance(inserted, (list, tuple)):
+        added = list(inserted)
+    else:
+        # ArcPy 3.6 may return a single Layer rather than a list.
+        added = [inserted]
     return _json_dumps(
         {
             "ok": True,
@@ -3055,6 +3065,31 @@ def arcgis_pro_close_views(aprx_path: str, view_type: str = "MAPS_AND_LAYOUTS") 
     allowed = {"MAPS", "LAYOUTS", "MAPS_AND_LAYOUTS", "REPORTS", "TABLES"}
     if normalized not in allowed:
         raise RuntimeError(f"view_type 须为 {sorted(allowed)} 之一")
+    active_view = getattr(project, "activeView", None)
+    active_category = ""
+    if active_view is not None:
+        if getattr(active_view, "map", None) is not None and getattr(active_view, "camera", None) is not None:
+            active_category = "MAPS"
+        elif hasattr(active_view, "listElements"):
+            active_category = "LAYOUTS"
+        else:
+            active_type = type(active_view).__name__.upper()
+            if "REPORT" in active_type:
+                active_category = "REPORTS"
+            elif "TABLE" in active_type:
+                active_category = "TABLES"
+    targeted_categories = {
+        "MAPS": {"MAPS"},
+        "LAYOUTS": {"LAYOUTS"},
+        "MAPS_AND_LAYOUTS": {"MAPS", "LAYOUTS"},
+        "REPORTS": {"REPORTS"},
+        "TABLES": {"TABLES"},
+    }[normalized]
+    if active_category in targeted_categories:
+        raise RuntimeError(
+            "为保护前台 CURRENT 宿主，拒绝关闭当前活动视图。"
+            "请先打开不属于 view_type 的另一类视图，再重试关闭非活动视图类别"
+        )
     project.closeViews(normalized)
     return _json_dumps({"ok": True, "aprx_path": path, "closed_view_type": normalized})
 
@@ -5173,9 +5208,16 @@ def arcgis_pro_gp_topo_to_raster(
     in_topo_features: str,
     out_raster: str,
     cell_size: float | None = None,
+    elevation_field: str = "VALUE",
 ) -> str:
     arcpy = _arcpy()
-    gp_raster.run_topo_to_raster(arcpy, in_topo_features, out_raster, cell_size)
+    gp_raster.run_topo_to_raster(
+        arcpy,
+        in_topo_features,
+        out_raster,
+        cell_size,
+        elevation_field,
+    )
     return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
 
 
@@ -5875,13 +5917,25 @@ def arcgis_pro_layer_add_field_alias(
     m = _get_map(project, map_name)
     lyr = _find_layer(m, layer_name)
     ds = lyr.dataSource
+    resolved_layer_name = str(getattr(lyr, "name", layer_name))
     fn = field_name.strip()
     fa = field_alias.strip()
     if not fn or not fa:
         raise RuntimeError("field_name 和 field_alias 不能为空")
+    if not is_current_project_token(aprx_path):
+        # ArcGISProject and Layer references opened in file mode can retain a
+        # schema lock on the data source.  They are no longer needed once the
+        # dataSource string has been resolved, so release the cached graph before
+        # AlterField.  CURRENT deliberately keeps the live project bound.
+        _PROJECT_CACHE.pop(_project_cache_key(path), None)
+        del lyr, m, project
+        gc.collect()
+        clear_workspace_cache = getattr(arcpy.management, "ClearWorkspaceCache", None)
+        if callable(clear_workspace_cache):
+            clear_workspace_cache()
     arcpy.management.AlterField(ds, fn, new_field_alias=fa)
     return _json_dumps(
-        {"ok": True, "aprx_path": path, "layer_name": layer_name,
+        {"ok": True, "aprx_path": path, "layer_name": resolved_layer_name,
          "field_name": fn, "field_alias": fa},
     )
 
@@ -7479,7 +7533,7 @@ def arcgis_pro_select_table_by_attribute(
         raise RuntimeError("where_clause 不能为空")
     result = arcpy.management.SelectLayerByAttribute(table, selection, where or None)
     selected_count, result_count = _verify_selection_result(
-        table, result, operation="表属性选择", count_output_index=1
+        table, result, count_output_index=1
     )
     return _json_dumps(
         {
@@ -7526,7 +7580,7 @@ def arcgis_pro_table_selection_fids(
 
 def _selection_state(layer: Any) -> tuple[list[int], str]:
     try:
-        values = sorted(int(value) for value in layer.getSelectionSet())
+        values = sorted(int(value) for value in (layer.getSelectionSet() or ()))
     except Exception as ex:  # noqa: BLE001
         raise RuntimeError("无法读取当前图层选择集") from ex
     digest = hashlib.sha256(
@@ -7842,7 +7896,7 @@ def arcgis_pro_delete_layer_selection(
     _view, active_map = _active_map_view(project)
     layer = _find_layer(active_map, layer_name)
     try:
-        selected = sorted(int(value) for value in layer.getSelectionSet())
+        selected = sorted(int(value) for value in (layer.getSelectionSet() or ()))
     except Exception as ex:  # noqa: BLE001
         raise RuntimeError("无法读取当前图层选择集") from ex
     if not selected:

@@ -29,32 +29,40 @@ internal static class ProContext
 
     private static ProContextSnapshot Capture(ContextGenerations generations)
     {
-        var project = Project.Current;
-        var activeTablePane = FrameworkApplication.Panes.ActivePane as ITablePane;
-        var activeTableMember = activeTablePane?.MapMember;
-        var layoutView = LayoutView.Active;
-        var mapView = layoutView?.ActivatedMapView ?? MapView.Active;
-        var map = mapView?.Map ?? activeTableMember?.Map;
-        var selectedLayers = mapView?.GetSelectedLayers() ?? Array.Empty<Layer>();
+        var project = CaptureStep("project", () => Project.Current);
+        var activeTablePane = CaptureStep(
+            "active_table_pane",
+            () => FrameworkApplication.Panes.ActivePane as ITablePane);
+        var activeTableMember = CaptureStep("active_table_member", () => activeTablePane?.MapMember);
+        var layoutView = CaptureStep("layout_view", () => LayoutView.Active);
+        var mapView = CaptureStep("map_view", () => layoutView?.ActivatedMapView ?? MapView.Active);
+        var map = CaptureStep("map", () => mapView?.Map ?? activeTableMember?.Map);
+        IReadOnlyList<Layer> selectedLayers = mapView is null
+            ? Array.Empty<Layer>()
+            : CaptureStep("selected_layers", () => mapView.GetSelectedLayers());
         var activeLayer = selectedLayers.FirstOrDefault();
-        var selectionLayers = new List<LayerSelectionSnapshot>();
-        if (map is not null)
-        {
-            foreach (var pair in map.GetSelection().ToDictionary<MapMember>()
-                         .Where(pair => pair.Value.Count > 0)
-                         .OrderBy(pair => pair.Key.URI, StringComparer.Ordinal))
+        var selectionLayers = map is null
+            ? new List<LayerSelectionSnapshot>()
+            : CaptureStep("selection_snapshot", () =>
             {
-                var ids = pair.Value.OrderBy(value => value).ToArray();
-                selectionLayers.Add(new LayerSelectionSnapshot(
-                    pair.Key.URI,
-                    pair.Key.Name,
-                    ids.Length,
-                    OidSelectionDigest.ComputeLayer(pair.Key.URI, ids)));
-            }
-        }
+                var result = new List<LayerSelectionSnapshot>();
+                foreach (var pair in map.GetSelection().ToDictionary()
+                             .Where(pair => pair.Value.Count > 0)
+                             .OrderBy(pair => pair.Key.URI, StringComparer.Ordinal))
+                {
+                    var ids = pair.Value.OrderBy(value => value).ToArray();
+                    result.Add(new LayerSelectionSnapshot(
+                        pair.Key.URI,
+                        pair.Key.Name,
+                        ids.Length,
+                        OidSelectionDigest.ComputeLayer(pair.Key.URI, ids)));
+                }
 
-        var camera = mapView?.Camera;
-        var time = mapView?.Time;
+                return result;
+            });
+
+        var camera = mapView is null ? null : CaptureStep("camera", () => mapView.Camera);
+        var time = mapView is null ? null : CaptureStep("time", () => mapView.Time);
         var totalSelected = selectionLayers.Sum(item => item.Count);
         var activeViewType = activeTablePane is not null
             ? "table"
@@ -64,7 +72,7 @@ internal static class ProContext
                     ? "map"
                     : "none";
         var activeViewUri = activeTableMember?.URI ?? layoutView?.Layout.URI ?? map?.URI;
-        return new ProContextSnapshot(
+        return CaptureStep("snapshot", () => new ProContextSnapshot(
             ProjectIdentity.Canonicalize(project?.URI),
             project?.Name ?? string.Empty,
             project?.ReadOnly ?? true,
@@ -75,13 +83,13 @@ internal static class ProContext
             camera is null
                 ? null
                 : new CameraSnapshot(
-                    camera.X,
-                    camera.Y,
-                    camera.Z,
-                    camera.Scale,
-                    camera.Heading,
-                    camera.Pitch,
-                    camera.Roll,
+                    FiniteOrNull(camera.X),
+                    FiniteOrNull(camera.Y),
+                    FiniteOrNull(camera.Z),
+                    FiniteOrNull(camera.Scale),
+                    FiniteOrNull(camera.Heading),
+                    FiniteOrNull(camera.Pitch),
+                    FiniteOrNull(camera.Roll),
                     camera.SpatialReference?.Wkid ?? 0,
                     camera.SpatialReference?.Name),
             activeLayer is null
@@ -98,11 +106,32 @@ internal static class ProContext
             generations.ContextGeneration,
             generations.SelectionGeneration,
             generations.EditGeneration,
-            generations.DrawGeneration);
+            generations.DrawGeneration));
     }
 
     private static string? FormatTime(DateTime? value) =>
         value?.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static double? FiniteOrNull(double value) => double.IsFinite(value) ? value : null;
+
+    private static T CaptureStep<T>(string step, Func<T> capture)
+    {
+        try
+        {
+            return capture();
+        }
+        catch (ApiException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new ApiException(
+                500,
+                $"context_{step}_failed",
+                $"Context capture failed at {step} ({ex.GetType().Name}).");
+        }
+    }
 }
 
 internal static class OidSelectionDigest

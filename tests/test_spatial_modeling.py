@@ -114,8 +114,7 @@ def _policy_roots(*, write: bool = True) -> Iterator[tuple[str, str]]:
             "ARCGIS_PRO_MCP_INPUT_ROOTS": os.pathsep.join((input_root, output_root)),
             "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
         }
-        if write:
-            environment["ARCGIS_PRO_MCP_ALLOW_WRITE"] = "1"
+        environment["ARCGIS_PRO_MCP_ALLOW_WRITE"] = "1" if write else "0"
         with patch.dict(os.environ, environment, clear=True):
             yield input_root, output_root
 

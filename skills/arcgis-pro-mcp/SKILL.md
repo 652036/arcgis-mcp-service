@@ -27,7 +27,7 @@ Read [references/runtime-notes.md](references/runtime-notes.md) before controlli
 
 ## Safety Invariants
 
-- Default to read-only. A user's request to inspect or diagnose does not authorize edits, exports, publication, or saves.
+- Even though the server's ordinary write gate is enabled by default, default agent behavior remains read-only. A user's request to inspect or diagnose does not authorize edits, exports, publication, or saves. Set `ARCGIS_PRO_MCP_ALLOW_WRITE=0` for a read-only deployment.
 - Respect every gate reported by `arcgis_pro_tool_info`, including conditional gates. Ordinary writes, destructive/schema operations, raw CIM, enterprise writes, publication, public sharing, overwrite publication, SDK edits, and SDK feature edits have distinct controls.
 - Keep project/input paths inside configured roots. Keep exports and GP outputs inside their respective roots. Never broaden a root to a drive or user profile merely to make a call pass.
 - Prefer named/typed wrappers. Generic GP requires base write permission, explicit enablement, an exact allowlist, a configured GP output root, and a complete new output path. It rejects container/name pairs, existing targets, in-place/no-output work, destructive tools, and code execution, and forces overwrite off. The SDK GP bridge additionally requires a built-in typed contract and its own allowlists.

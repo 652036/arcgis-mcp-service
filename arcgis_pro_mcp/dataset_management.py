@@ -80,7 +80,13 @@ def _require_exists(arcpy: Any, path: str, label: str) -> None:
         raise RuntimeError(f"{label} 不存在：{path}")
 
 
-def _require_schema_lock(arcpy: Any, path: str) -> None:
+def _require_schema_lock(arcpy: Any, path: str, *, container: bool = False) -> None:
+    # ArcPy 3.6 reports False for TestSchemaLock on FileGDB workspaces and
+    # feature-dataset containers even when the immediately following schema GP
+    # operation succeeds. TestSchemaLock is meaningful for concrete datasets;
+    # container-level tools perform the authoritative, atomic lock check.
+    if container:
+        return
     tester = getattr(arcpy, "TestSchemaLock", None)
     if not callable(tester):
         tester = getattr(getattr(arcpy, "management", None), "TestSchemaLock", None)
@@ -264,7 +270,7 @@ def run_create_domain(
     require_allow_write()
     workspace = validate_input_path_optional(workspace_path, "workspace_path")
     _require_exists(arcpy, workspace, "workspace_path")
-    _require_schema_lock(arcpy, workspace)
+    _require_schema_lock(arcpy, workspace, container=True)
     name = _clean_name(domain_name, "domain_name")
     description = _clean_name(domain_description, "domain_description", max_length=1000)
     field = _enum(field_type, _FIELD_TYPES, "field_type")
@@ -279,7 +285,7 @@ def run_delete_domain(arcpy: Any, workspace_path: str, domain_name: str) -> list
     require_allow_write()
     workspace = validate_input_path_optional(workspace_path, "workspace_path")
     _require_exists(arcpy, workspace, "workspace_path")
-    _require_schema_lock(arcpy, workspace)
+    _require_schema_lock(arcpy, workspace, container=True)
     result = arcpy.management.DeleteDomain(workspace, _clean_name(domain_name, "domain_name"))
     return _messages(result)
 
@@ -298,7 +304,7 @@ def run_alter_domain(
     require_allow_write()
     workspace = validate_input_path_optional(workspace_path, "workspace_path")
     _require_exists(arcpy, workspace, "workspace_path")
-    _require_schema_lock(arcpy, workspace)
+    _require_schema_lock(arcpy, workspace, container=True)
     if not any(
         value.strip()
         for value in (
@@ -336,7 +342,7 @@ def run_add_coded_value_to_domain(
     require_allow_write()
     workspace = validate_input_path_optional(workspace_path, "workspace_path")
     _require_exists(arcpy, workspace, "workspace_path")
-    _require_schema_lock(arcpy, workspace)
+    _require_schema_lock(arcpy, workspace, container=True)
     result = arcpy.management.AddCodedValueToDomain(
         workspace,
         _clean_name(domain_name, "domain_name"),
@@ -355,7 +361,7 @@ def run_delete_coded_value_from_domain(
     require_allow_write()
     workspace = validate_input_path_optional(workspace_path, "workspace_path")
     _require_exists(arcpy, workspace, "workspace_path")
-    _require_schema_lock(arcpy, workspace)
+    _require_schema_lock(arcpy, workspace, container=True)
     result = arcpy.management.DeleteCodedValueFromDomain(
         workspace,
         _clean_name(domain_name, "domain_name"),
@@ -374,7 +380,7 @@ def run_set_range_domain(
     require_allow_write()
     workspace = validate_input_path_optional(workspace_path, "workspace_path")
     _require_exists(arcpy, workspace, "workspace_path")
-    _require_schema_lock(arcpy, workspace)
+    _require_schema_lock(arcpy, workspace, container=True)
     if minimum_value is None or maximum_value is None:
         raise RuntimeError("minimum_value 和 maximum_value 不能为空")
     result = arcpy.management.SetValueForRangeDomain(
@@ -651,7 +657,7 @@ def run_create_topology(
     require_gp_output_root_mandatory()
     feature_dataset_path = validate_gp_output_path(feature_dataset, "feature_dataset")
     _require_exists(arcpy, feature_dataset_path, "feature_dataset")
-    _require_schema_lock(arcpy, feature_dataset_path)
+    _require_schema_lock(arcpy, feature_dataset_path, container=True)
     name = _clean_dataset_name(topology_name, "topology_name")
     args: list[Any] = [feature_dataset_path, name]
     if cluster_tolerance is not None:
@@ -740,10 +746,20 @@ def run_remove_rule_from_topology(
     topology = validate_gp_output_path(topology_path, "topology_path")
     _require_exists(arcpy, topology, "topology_path")
     _require_schema_lock(arcpy, topology)
-    result = arcpy.management.RemoveRuleFromTopology(
-        topology,
-        _clean_name(rule_name, "rule_name", max_length=500),
-    )
+    cleaned_rule = _clean_name(rule_name, "rule_name", max_length=500)
+    try:
+        result = arcpy.management.RemoveRuleFromTopology(topology, cleaned_rule)
+    except Exception:  # noqa: BLE001
+        # ArcGIS Pro 3.6 accepts the friendly ``(Point)`` token when adding
+        # this rule but exposes only the legacy numeric token when removing it.
+        # Retry only this known compatibility case so unrelated GP errors are
+        # still reported unchanged.
+        if cleaned_rule != "Must Be Disjoint (Point)":
+            raise
+        result = arcpy.management.RemoveRuleFromTopology(
+            topology,
+            "Must Be Disjoint (8)",
+        )
     return _messages(result)
 
 
@@ -759,7 +775,14 @@ def run_remove_feature_class_from_topology(
     _require_exists(arcpy, topology, "topology_path")
     _require_exists(arcpy, features, "feature_class")
     _require_schema_lock(arcpy, topology)
-    return _messages(arcpy.management.RemoveFeatureClassFromTopology(topology, features))
+    # ArcGIS Pro 3.6's RemoveFeatureClassFromTopology value table enumerates
+    # participant names rather than accepting the full catalog path.
+    return _messages(
+        arcpy.management.RemoveFeatureClassFromTopology(
+            topology,
+            os.path.basename(features),
+        )
+    )
 
 
 def run_validate_topology(arcpy: Any, topology_path: str, extent: str = "") -> list[str]:

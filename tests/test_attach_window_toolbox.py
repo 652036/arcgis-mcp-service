@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
 import types
 import unittest
@@ -38,6 +39,8 @@ class AttachWindowEntryTests(unittest.TestCase):
             sys.modules["arcpy"] = types.ModuleType("arcpy")
 
             import arcgis_pro_mcp_bootstrap as bootstrap
+            bootstrap._promote_repo_root(root)
+            bootstrap._activate_repo_dependencies(root)
             from arcgis_pro_mcp import paths, pro_attach, pro_host, server
 
             old_attach = pro_attach
@@ -302,6 +305,21 @@ class AttachWindowEntryTests(unittest.TestCase):
 
 
 class BootstrapSafetyTests(unittest.TestCase):
+    def test_checkout_local_fastmcp_dependencies_are_added_after_repo(self) -> None:
+        original_path = list(sys.path)
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                dependency_root = root / ".arcgis-pro-mcp-deps"
+                (dependency_root / "mcp" / "server" / "fastmcp").mkdir(parents=True)
+                bootstrap._promote_repo_root(root)
+                activated = bootstrap._activate_repo_dependencies(root)
+                self.assertEqual(activated, dependency_root)
+                self.assertEqual(sys.path[0], str(root))
+                self.assertEqual(sys.path[1], str(dependency_root))
+        finally:
+            sys.path[:] = original_path
+
     def test_incompatible_fastmcp_has_actionable_version_error(self) -> None:
         with (
             patch.object(
@@ -315,8 +333,11 @@ class BootstrapSafetyTests(unittest.TestCase):
                 return_value="2.1.1",
             ),
         ):
-            with self.assertRaisesRegex(RuntimeError, r"mcp>=1\.20,<2"):
-                bootstrap._require_compatible_fastmcp()
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"pip install --target .*\.arcgis-pro-mcp-deps.*mcp>=1\.20,<2",
+            ):
+                bootstrap._require_compatible_fastmcp(ROOT)
 
     def test_compatible_fastmcp_returns_distribution_version(self) -> None:
         compatible = types.SimpleNamespace(FastMCP=object)

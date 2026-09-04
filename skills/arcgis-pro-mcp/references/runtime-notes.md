@@ -32,6 +32,8 @@ Do not change modes to work around a rejected gate or path. A deliberate mode ch
 4. Use `arcgis_pro_active_view_info(aprx_path="CURRENT")` as the first target smoke test.
 5. Pass `CURRENT` only to tools whose schema includes `aprx_path`. Absolute project paths remain file-mode calls even while a host is running.
 
+The bootstrap automatically activates a compatible FastMCP installed under the checkout's `.arcgis-pro-mcp-deps`. If `mcp.server.fastmcp` is missing, run the ArcGIS Pro environment's `python.exe -m pip install --target <checkout>\\.arcgis-pro-mcp-deps "mcp>=1.20,<2"`; `ArcGISPro.exe -m pip` is not a valid installer command.
+
 The host is authenticated, loopback-only, bounded, and serialized. It creates one `ArcGISProject("CURRENT")` reference for target verification and execution of each request. On Windows its discovery state is atomically published under `%LOCALAPPDATA%\ArcGISProMcp\window-host` with a protected current-user ACL; the reader rejects symlinks/reparse points and invalid owner/DACL/type/size. Treat the state file as a local capability secret. The stdio client forwards only an allowlisted set of policy variables; the host does not enable permissions itself.
 
 `CURRENT` fails closed on a missing/not-ready host, protocol mismatch, new host session, project switch, or stale target confirmation. Call `arcgis_pro_window_status` again after any host restart or project switch. Never automatically substitute the on-disk project path.

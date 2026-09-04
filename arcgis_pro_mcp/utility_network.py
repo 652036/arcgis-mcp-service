@@ -207,7 +207,7 @@ def trace_named_configuration(
             else "DO_NOT_CLEAR_ALL_PREVIOUS_TRACE_RESULTS"
         ),
         trace_name=str(trace_name or "").strip(),
-        use_trace_config="USE_TRACE_CONFIG",
+        use_trace_config="USE_TRACE_CONFIGURATION",
         trace_config_name=config,
     )
     return {

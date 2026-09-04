@@ -51,7 +51,13 @@ def extension_status(
 
 @contextmanager
 def checked_out_extension(arcpy: Any, extension_name: str) -> Iterator[None]:
-    """Check out one extension for a single call and check it back in afterwards."""
+    """Check out an extension, retaining Spatial for the MCP host lifetime.
+
+    ArcGIS Pro 3.6 can terminate Python with ``0xc0000005`` in
+    ``CheckInExtension`` immediately after a Spatial Analyst raster object has
+    been saved. Keeping Spatial checked out is the only reliable option for a
+    long-running MCP host; other extensions are returned after each call.
+    """
     name = (extension_name or "").strip()
     if not name:
         raise RuntimeError("extension_name 不能为空")
@@ -67,7 +73,7 @@ def checked_out_extension(arcpy: Any, extension_name: str) -> Iterator[None]:
     try:
         yield
     finally:
-        if checked_out_here:
+        if checked_out_here and name.casefold() != "spatial":
             try:
                 arcpy.CheckInExtension(name)
             except Exception:  # noqa: BLE001

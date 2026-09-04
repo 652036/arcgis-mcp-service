@@ -142,6 +142,71 @@ class ServerToolTests(unittest.TestCase):
             server._get_map(project, "Map")
         self.assertIs(server._get_map(project, "map://b"), second)
 
+    def test_insert_layer_accepts_single_layer_returned_by_arcpy_36(self) -> None:
+        reference = SimpleNamespace(name="Reference")
+        source = SimpleNamespace(name="Source")
+        inserted = SimpleNamespace(name="Inserted", URI="layer://inserted")
+        target_map = SimpleNamespace(insertLayer=MagicMock(return_value=inserted))
+
+        with patch.dict(
+            os.environ,
+            {"ARCGIS_PRO_MCP_ALLOW_WRITE": "1"},
+            clear=True,
+        ), patch.object(
+            server,
+            "_open_project",
+            return_value=(object(), object(), r"C:\\demo.aprx"),
+        ), patch.object(server, "_get_map", return_value=target_map), patch.object(
+            server,
+            "_find_layer",
+            side_effect=[reference, source],
+        ):
+            payload = json.loads(
+                server.arcgis_pro_insert_layer(
+                    r"C:\\demo.aprx", "Map", "Reference", "Source", "AFTER"
+                )
+            )
+
+        target_map.insertLayer.assert_called_once_with(reference, source, "AFTER")
+        self.assertEqual(payload["added_count"], 1)
+
+    def test_add_field_alias_releases_file_project_cache_before_alter(self) -> None:
+        project_path = r"C:\\work\\demo.aprx"
+        project = object()
+        layer = SimpleNamespace(name="Roads", dataSource=r"C:\\data\\roads.gdb\\roads")
+        target_map = object()
+        management = SimpleNamespace(
+            ClearWorkspaceCache=MagicMock(),
+            AlterField=MagicMock(),
+        )
+        fake_arcpy = SimpleNamespace(management=management)
+        cache_key = server._project_cache_key(project_path)
+        server._PROJECT_CACHE[cache_key] = project
+
+        with patch.dict(
+            os.environ,
+            {"ARCGIS_PRO_MCP_ALLOW_WRITE": "1"},
+            clear=True,
+        ), patch.object(
+            server,
+            "_open_project",
+            return_value=(fake_arcpy, project, project_path),
+        ), patch.object(server, "_get_map", return_value=target_map), patch.object(
+            server, "_find_layer", return_value=layer
+        ):
+            payload = json.loads(
+                server.arcgis_pro_layer_add_field_alias(
+                    project_path, "Map", "Roads", "NAME", "Road name"
+                )
+            )
+
+        self.assertNotIn(cache_key, server._PROJECT_CACHE)
+        management.ClearWorkspaceCache.assert_called_once_with()
+        management.AlterField.assert_called_once_with(
+            layer.dataSource, "NAME", new_field_alias="Road name"
+        )
+        self.assertEqual(payload["layer_name"], "Roads")
+
     def test_layer_properties_reads_renderer_type_not_symbology_type(self) -> None:
         renderer = SimpleNamespace(type="SimpleRenderer")
         layer = SimpleNamespace(
@@ -292,6 +357,39 @@ class ServerToolTests(unittest.TestCase):
         self.assertEqual(payload["result_count"], 2)
         self.assertIs(payload["selection_verified"], True)
 
+    def test_table_attribute_selection_verifies_derived_count(self) -> None:
+        table = SimpleNamespace(
+            name="Records",
+            getSelectionSet=MagicMock(return_value={1, 2}),
+        )
+        result = SimpleNamespace(getOutput=MagicMock(return_value="2"))
+        select = MagicMock(return_value=result)
+        fake_arcpy = SimpleNamespace(
+            management=SimpleNamespace(SelectLayerByAttribute=select)
+        )
+
+        with patch.dict(
+            os.environ,
+            {"ARCGIS_PRO_MCP_ALLOW_WRITE": "1"},
+            clear=True,
+        ), patch.object(
+            server,
+            "_open_project",
+            return_value=(fake_arcpy, object(), r"C:\\demo.aprx"),
+        ), patch.object(server, "_get_map", return_value=object()), patch.object(
+            server, "_get_table", return_value=table
+        ):
+            payload = json.loads(
+                server.arcgis_pro_select_table_by_attribute(
+                    r"C:\\demo.aprx", "Map", "Records", where_clause="1=1"
+                )
+            )
+
+        select.assert_called_once_with(table, "NEW_SELECTION", "1=1")
+        result.getOutput.assert_called_once_with(1)
+        self.assertEqual(payload["selected_count"], 2)
+        self.assertEqual(payload["result_count"], 2)
+
     def test_clear_layer_selection_verifies_empty_set(self) -> None:
         selected = {3}
 
@@ -396,6 +494,16 @@ class ServerToolTests(unittest.TestCase):
         self.assertEqual(fids_payload["fids"], [1, 9])
         self.assertEqual(fids_payload["selected_count"], 3)
         self.assertIs(fids_payload["truncated"], True)
+
+    def test_current_selection_state_accepts_arcgis_none_for_empty_selection(self) -> None:
+        values, digest = server._selection_state(
+            SimpleNamespace(getSelectionSet=lambda: None)
+        )
+        self.assertEqual(values, [])
+        self.assertEqual(
+            digest,
+            "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        )
 
     def test_da_query_rows_delegates_to_shared_reader(self) -> None:
         captured: dict[str, object] = {}
@@ -539,6 +647,32 @@ class ServerToolTests(unittest.TestCase):
         project.closeViews.assert_called_once_with("MAPS_AND_LAYOUTS")
         target_map.openView.assert_called_once_with()
         self.assertEqual(payload["opened_map"], "Target")
+
+    def test_close_views_rejects_closing_the_active_map_view(self) -> None:
+        active_view = SimpleNamespace(map=object(), camera=object())
+        project = SimpleNamespace(activeView=active_view, closeViews=MagicMock())
+        with patch.dict(os.environ, {"ARCGIS_PRO_MCP_ALLOW_WRITE": "1"}, clear=True), patch.object(
+            server,
+            "_open_project",
+            return_value=(object(), project, r"C:\\live.aprx"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "拒绝关闭当前活动视图"):
+                server.arcgis_pro_close_views("CURRENT", "MAPS_AND_LAYOUTS")
+        project.closeViews.assert_not_called()
+
+    def test_close_views_can_close_non_active_view_categories(self) -> None:
+        class ReportView:
+            pass
+
+        project = SimpleNamespace(activeView=ReportView(), closeViews=MagicMock())
+        with patch.dict(os.environ, {"ARCGIS_PRO_MCP_ALLOW_WRITE": "1"}, clear=True), patch.object(
+            server,
+            "_open_project",
+            return_value=(object(), project, r"C:\\live.aprx"),
+        ):
+            payload = json.loads(server.arcgis_pro_close_views("CURRENT", "MAPS_AND_LAYOUTS"))
+        project.closeViews.assert_called_once_with("MAPS_AND_LAYOUTS")
+        self.assertEqual(payload["closed_view_type"], "MAPS_AND_LAYOUTS")
 
     def test_set_active_view_extent_uses_map_view_camera(self) -> None:
         extent = SimpleNamespace(

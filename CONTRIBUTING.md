@@ -61,7 +61,9 @@ Avoid hard-coded tool totals in documentation. The authoritative inventory is pr
 
 ## Safety requirements
 
-- All ordinary writes require `ARCGIS_PRO_MCP_ALLOW_WRITE=1`.
+- Ordinary writes require the base write gate to remain enabled. It is enabled
+  when `ARCGIS_PRO_MCP_ALLOW_WRITE` is unset; set the variable to `0`, `false`,
+  `no`, or `off` for a read-only deployment.
 - Destructive, raw CIM, publishing, public-sharing, overwrite-publish, enterprise, and SDK-native operations must enforce their narrower gates as well.
 - Output-producing GP must require and remain below `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT`.
 - Prefer named wrappers. Generic Python GP and SDK GP require exact allowlists; SDK GP also requires a reviewed typed contract.

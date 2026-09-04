@@ -4,11 +4,11 @@ Call `arcgis_pro_server_capabilities` and `arcgis_pro_tool_info(name="...")` in 
 
 ## Policy Environment
 
-All feature flags default to disabled. Enabled boolean values are `1`, `true`, `yes`, or `on` unless a tool says otherwise.
+Ordinary reads and writes are enabled by default. Set `ARCGIS_PRO_MCP_ALLOW_WRITE=0` (or `false`, `no`, or `off`) for a read-only deployment. All narrower high-impact feature flags remain disabled by default. Enabled boolean values are `1`, `true`, `yes`, or `on` unless a tool says otherwise.
 
 | Variable | Scope |
 | --- | --- |
-| `ARCGIS_PRO_MCP_ALLOW_WRITE` | Base gate for project/map/data mutations and write GP. It does not by itself authorize destructive, enterprise, publishing, CIM, or SDK editing operations. |
+| `ARCGIS_PRO_MCP_ALLOW_WRITE` | Base gate for project/map/data mutations and write GP; enabled when unset. Set it to `0`, `false`, `no`, or `off` to disable ordinary writes. It does not by itself authorize destructive, enterprise, publishing, CIM, or SDK editing operations. |
 | `ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE` | Additional gate for deletion, truncation, overwrite/removal, discard-all, high-risk schema changes, and other tools marked destructive. Exact confirmations still apply. |
 | `ARCGIS_PRO_MCP_ALLOW_CIM_WRITE` | Additional gate for raw CIM mutation. Prefer semantic cartography/layout tools. |
 | `ARCGIS_PRO_MCP_ALLOW_ENTERPRISE_WRITE` | Additional gate for enterprise version management, reconciliation/post, maintenance, and Utility Network administration. It is not a blanket gate for ordinary feature/row edits. Some enterprise operations also require the destructive gate. |

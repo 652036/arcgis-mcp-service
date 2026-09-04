@@ -22,6 +22,30 @@ class _FakeArcpy:
 
 
 class LiveAnalysisSecurityTests(unittest.TestCase):
+    def test_query_current_layer_accepts_none_for_empty_selection(self) -> None:
+        layer = SimpleNamespace(
+            name="Roads",
+            longName="Roads",
+            URI="layer://roads",
+            getSelectionSet=lambda: None,
+        )
+        map_obj = SimpleNamespace(
+            name="Current",
+            listLayers=lambda: [layer],
+        )
+        arcpy = SimpleNamespace(
+            ListFields=lambda _layer: [SimpleNamespace(name="OBJECTID")]
+        )
+        result = live_analysis.query_current_layer(
+            arcpy,
+            map_obj,
+            "Roads",
+            ["OBJECTID"],
+            selected_only=True,
+        )
+        self.assertEqual(result["selection_count"], 0)
+        self.assertEqual(result["rows"], [])
+
     def test_calculate_field_is_not_allowlisted_and_is_explicitly_denied(self) -> None:
         self.assertNotIn("management.CalculateField", live_analysis.CURRENT_NAMED_GP_TOOLS)
         with self.assertRaisesRegex(RuntimeError, "永久拒绝"):

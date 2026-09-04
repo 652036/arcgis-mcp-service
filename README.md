@@ -143,6 +143,14 @@ Python 宿主能复用大量现有 `aprx_path` 工具，是接入当前工程最
 5. 用 `arcgis_pro_active_view_info(aprx_path="CURRENT")` 做只读 smoke test。
 6. 只有操作眼前窗口时，后续工具才传 `aprx_path="CURRENT"`。
 
+窗口启动器会优先使用仓库根目录 `.arcgis-pro-mcp-deps` 中的兼容 FastMCP，避免修改 ArcGIS Pro 的系统环境。若启动时报 `No module named 'mcp'`，在 PowerShell 中运行（按实际路径替换）：
+
+```powershell
+& "C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe" -m pip install --target "C:\path\to\arcgis-mcp-service\.arcgis-pro-mcp-deps" "mcp>=1.20,<2"
+```
+
+安装后重新运行“接入当前窗口”即可，不需要用 `ArcGISPro.exe -m pip`。
+
 也可在 ArcGIS Pro 的 Python 窗口中启动：
 
 ```python
@@ -191,11 +199,11 @@ SDK 写请求使用 `expectedMapUri`、context/selection/edit generation、选�
 
 ## 安全模型
 
-所有开关默认关闭。基础写入开关不是万能授权；高风险操作必须同时满足更窄的门禁、精确目标确认和路径策略。
+普通读写默认开启；设置 `ARCGIS_PRO_MCP_ALLOW_WRITE=0` 可显式切换为只读。其余高风险开关默认关闭，基础写入权限也不是万能授权；删除、发布、企业维护、CIM 与 SDK 编辑仍必须同时满足更窄的门禁、精确目标确认和路径策略。
 
 | 配置 | 作用 |
 | --- | --- |
-| `ARCGIS_PRO_MCP_ALLOW_WRITE=1` | 普通写入总开关 |
+| `ARCGIS_PRO_MCP_ALLOW_WRITE` | 普通写入总开关，默认开启；设为 `0`、`false`、`no` 或 `off` 可关闭 |
 | `ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE=1` | 删除、覆盖、丢弃编辑等破坏性操作 |
 | `ARCGIS_PRO_MCP_ALLOW_CIM_WRITE=1` | 原始 CIM 写入 |
 | `ARCGIS_PRO_MCP_ALLOW_ENTERPRISE_WRITE=1` | 企业版本管理、维护和 Utility Network 管理操作；不替代普通要素/行编辑授权 |
@@ -245,6 +253,10 @@ SDK 写请求使用 `expectedMapUri`、context/selection/edit generation、选�
 5. 再启动宿主并重启 MCP 客户端。只有旧类或中断标记仍被 Pro 持有时才需要重启 ArcGIS Pro。
 
 不要在宿主仍运行时强制 `importlib.reload()`；它可能混用两代模块和工具注册。
+
+### `No module named 'mcp'`
+
+不要对 `ArcGISPro.exe` 使用 `-m pip`。按“接入当前窗口”一节的命令，用 ArcGIS Pro 环境内的 `python.exe` 将 `mcp>=1.20,<2` 安装到仓库本地 `.arcgis-pro-mcp-deps`，然后重新运行工具箱入口。启动器会自动发现该目录。
 
 ### `window_attached=false` 或 `target_confirmed=false`
 

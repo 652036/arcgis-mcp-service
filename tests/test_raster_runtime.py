@@ -111,14 +111,23 @@ class RasterRuntimeTests(unittest.TestCase):
         self.assertEqual(result, {"Spatial": "Available", "Network": "Available"})
         self.assertEqual(arcpy.extension_events, [("check", "Spatial"), ("check", "Network")])
 
-    def test_extension_scope_checks_in_even_when_body_raises(self) -> None:
+    def test_extension_scope_keeps_license_for_host_lifetime_when_body_raises(self) -> None:
         arcpy = _Arcpy()
         with self.assertRaisesRegex(ValueError, "boom"):
             with raster_runtime.checked_out_extension(arcpy, "Spatial"):
                 raise ValueError("boom")
         self.assertEqual(
             arcpy.extension_events,
-            [("check", "Spatial"), ("out", "Spatial"), ("in", "Spatial")],
+            [("check", "Spatial"), ("out", "Spatial")],
+        )
+
+    def test_extension_scope_returns_non_spatial_license(self) -> None:
+        arcpy = _Arcpy()
+        with raster_runtime.checked_out_extension(arcpy, "Network"):
+            pass
+        self.assertEqual(
+            arcpy.extension_events,
+            [("check", "Network"), ("out", "Network"), ("in", "Network")],
         )
 
     def test_extension_scope_rejects_unavailable_license(self) -> None:
@@ -205,7 +214,7 @@ class RasterRuntimeTests(unittest.TestCase):
             ["Fill", "FlowDirection", "FlowAccumulation", "SnapPourPoint", "Watershed"],
         )
         self.assertEqual(len(arcpy.saved), 5)
-        self.assertEqual(arcpy.extension_events.count(("in", "Spatial")), 5)
+        self.assertEqual(arcpy.extension_events.count(("in", "Spatial")), 0)
 
     def test_hydrology_rejects_output_outside_root(self) -> None:
         with tempfile.TemporaryDirectory() as input_root, tempfile.TemporaryDirectory() as output_root:

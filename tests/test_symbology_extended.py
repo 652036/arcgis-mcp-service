@@ -107,9 +107,12 @@ class ExtendedSymbologyTests(unittest.TestCase):
                 symbolLayers=[SimpleNamespace(color=color)],
             ),
         )
+        text_symbol_reference = SimpleNamespace(symbol=text_symbol)
         label_class = SimpleNamespace(name="Default")
         cim = SimpleNamespace(
-            labelClasses=[SimpleNamespace(name="Default", textSymbol=text_symbol)],
+            labelClasses=[
+                SimpleNamespace(name="Default", textSymbol=text_symbol_reference)
+            ],
         )
         layer = SimpleNamespace(
             listLabelClasses=lambda: [label_class],

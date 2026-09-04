@@ -121,7 +121,8 @@ class UtilityNetworkTests(unittest.TestCase):
         )
         self.assertEqual(result["trace_config_name"], "Approved downstream")
         kwargs = self.arcpy.un.calls[-1][2]
-        self.assertEqual(kwargs["use_trace_config"], "USE_TRACE_CONFIG")
+        self.assertEqual(kwargs["use_trace_config"], "USE_TRACE_CONFIGURATION")
+        self.assertEqual(kwargs["trace_config_name"], "Approved downstream")
 
     def test_all_subnetworks_needs_fixed_confirmation_phrase(self):
         with self.assertRaisesRegex(RuntimeError, "UPDATE_ALL"):

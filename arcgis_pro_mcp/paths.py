@@ -22,8 +22,11 @@ _WINDOWS_RESERVED_NAME_RE = re.compile(
 )
 
 
-def _env_enabled(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+def _env_enabled(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 def normalize_path(p: str) -> str:
@@ -202,13 +205,13 @@ def validate_project_path(project_path: str, label: str = "aprx_path") -> str:
 
 
 def writes_allowed() -> bool:
-    return _env_enabled("ARCGIS_PRO_MCP_ALLOW_WRITE")
+    return _env_enabled("ARCGIS_PRO_MCP_ALLOW_WRITE", default=True)
 
 
 def require_allow_write() -> None:
     if not writes_allowed():
         raise RuntimeError(
-            "写入类操作已禁用。设置 ARCGIS_PRO_MCP_ALLOW_WRITE=1 以启用：保存工程、修改图层、"
+            "写入类操作已禁用：ARCGIS_PRO_MCP_ALLOW_WRITE 被显式设为关闭。删除该环境变量或设置为 1 以启用：保存工程、修改图层、"
             "按属性/位置选择、地图框缩放到书签、添加/移除图层、写入型 GP、Join 与布局文本等。"
         )
 
@@ -226,7 +229,7 @@ def require_allow_destructive() -> None:
     require_allow_write()
     if not destructive_allowed():
         raise RuntimeError(
-            "破坏性操作已禁用。除 ARCGIS_PRO_MCP_ALLOW_WRITE=1 外，还必须设置 "
+            "破坏性操作已禁用。普通写入必须保持启用，且还必须设置 "
             "ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE=1，并提供工具要求的 expected_count/confirm_all。"
         )
 

@@ -288,11 +288,12 @@ def _roots(
     export_root: bool = True,
 ) -> Iterator[tuple[str, str]]:
     with tempfile.TemporaryDirectory() as input_root, tempfile.TemporaryDirectory() as output_root:
-        environment = {"ARCGIS_PRO_MCP_INPUT_ROOTS": input_root}
+        environment = {
+            "ARCGIS_PRO_MCP_INPUT_ROOTS": input_root,
+            "ARCGIS_PRO_MCP_ALLOW_WRITE": "1" if allow_write else "0",
+        }
         if export_root:
             environment["ARCGIS_PRO_MCP_EXPORT_ROOT"] = output_root
-        if allow_write:
-            environment["ARCGIS_PRO_MCP_ALLOW_WRITE"] = "1"
         if allow_destructive:
             environment["ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE"] = "1"
         with patch.dict(os.environ, environment, clear=True):
@@ -300,6 +301,16 @@ def _roots(
 
 
 class DataIntegrityTests(unittest.TestCase):
+    def test_non_applicable_rule_severity_minus_one_is_normalized(self) -> None:
+        rule = _Rule("Constraint", "esriARTConstraint")
+        rule.severity = -1
+        self.assertIsNone(data_integrity._attribute_rule_payload(rule)["severity"])
+
+    def test_rule_inventory_ignores_arcgis_managed_evaluation_order(self) -> None:
+        first = {"name": "A", "type": "constraint", "evaluation_order": 1}
+        renumbered = {"name": "A", "type": "constraint", "evaluation_order": 2}
+        self.assertTrue(data_integrity._same_rule_inventory([first], [renumbered]))
+
     def test_read_inventory_uses_describe_and_da_list(self) -> None:
         with _roots() as (input_root, _output_root):
             dataset = str(Path(input_root) / "data.gdb" / "assets")
