@@ -309,7 +309,8 @@ class BootstrapSafetyTests(unittest.TestCase):
         original_path = list(sys.path)
         try:
             with tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
+                # Match bootstrap's canonical paths, including Windows 8.3 names.
+                root = Path(temporary).resolve()
                 dependency_root = root / ".arcgis-pro-mcp-deps"
                 (dependency_root / "mcp" / "server" / "fastmcp").mkdir(parents=True)
                 bootstrap._promote_repo_root(root)
