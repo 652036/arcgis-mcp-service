@@ -287,7 +287,7 @@ def _prepare_private_directory(directory: Path) -> None:
         raise RuntimeError("无法验证窗口宿主状态目录的当前用户私有权限")
 
 
-def private_file_is_trusted(path: Path) -> bool:
+def private_file_is_trusted(path: Path, *, max_bytes: int = MAX_PRIVATE_STATE_BYTES) -> bool:
     """Return whether an existing state file satisfies the local trust contract."""
 
     try:
@@ -298,17 +298,17 @@ def private_file_is_trusted(path: Path) -> bool:
         info = path.lstat()
         if _is_reparse_or_link(path) or not stat.S_ISREG(info.st_mode):
             return False
-        if info.st_size < 2 or info.st_size > MAX_PRIVATE_STATE_BYTES:
+        if info.st_size < 2 or info.st_size > max_bytes:
             return False
         return _permissions_are_private(path, directory=False)
     except OSError:
         return False
 
 
-def read_private_json(path: Path) -> dict[str, Any]:
+def read_private_json(path: Path, *, max_bytes: int = MAX_PRIVATE_STATE_BYTES) -> dict[str, Any]:
     """Read a trusted, bounded JSON object or return an empty object."""
 
-    if not private_file_is_trusted(path):
+    if not private_file_is_trusted(path, max_bytes=max_bytes):
         return {}
     try:
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
@@ -317,13 +317,13 @@ def read_private_json(path: Path) -> dict[str, Any]:
         descriptor = os.open(path, flags)
         try:
             before = os.fstat(descriptor)
-            raw = os.read(descriptor, MAX_PRIVATE_STATE_BYTES + 1)
+            raw = os.read(descriptor, max_bytes + 1)
             after = os.fstat(descriptor)
         finally:
             os.close(descriptor)
         if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
             return {}
-        if len(raw) > MAX_PRIVATE_STATE_BYTES:
+        if len(raw) > max_bytes:
             return {}
         payload = json.loads(raw.decode("utf-8-sig"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -331,12 +331,12 @@ def read_private_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def write_private_json(path: Path, payload: dict[str, Any], *, temp_tag: str) -> None:
+def write_private_json(path: Path, payload: dict[str, Any], *, temp_tag: str, max_bytes: int = MAX_PRIVATE_STATE_BYTES) -> None:
     """Atomically publish a bounded JSON state object with private permissions."""
 
     _prepare_private_directory(path.parent)
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    if len(raw) > MAX_PRIVATE_STATE_BYTES:
+    if len(raw) > max_bytes:
         raise RuntimeError("窗口宿主状态超过大小限制")
     safe_tag = "".join(ch for ch in str(temp_tag) if ch.isalnum())[:64]
     if not safe_tag:
@@ -356,7 +356,7 @@ def write_private_json(path: Path, payload: dict[str, Any], *, temp_tag: str) ->
             raise RuntimeError("无法验证窗口宿主临时状态文件的私有权限")
         os.replace(temporary, path)
         _set_private_permissions(path, directory=False)
-        if not private_file_is_trusted(path):
+        if not private_file_is_trusted(path, max_bytes=max_bytes):
             raise RuntimeError("无法验证窗口宿主状态文件的当前用户私有权限")
     finally:
         if descriptor >= 0:

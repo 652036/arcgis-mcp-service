@@ -175,3 +175,7 @@ Keep draft and service-definition artifacts under the export root and use new, n
 ## Deliberately Unsupported
 
 No tool authorizes arbitrary Python/.NET execution, arbitrary Ribbon/dialog clicking, remote bridge binding, credentials/tokens, unreviewed generic SDK GP, arbitrary SDK CIM, implicit SDK reprojection, Portal network services, or interactive SDK prompt geometry. Unsupported extensions/data models fail explicitly rather than being emulated.
+
+## Checked raster clipping
+
+New file-mode tools: `arcgis_pro_analysis_asset_info`, `arcgis_pro_gp_clip_raster_checked`, and `arcgis_pro_analysis_result_status`. See [analysis-validation.md](analysis-validation.md) for roles, supported formats, run IDs and quality gates. Legacy calculator requires explicit raster bindings; reclassify supports missing_values=ERROR and remap_mode=VALUE.

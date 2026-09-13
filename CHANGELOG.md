@@ -6,6 +6,11 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 
 ## [Unreleased]
 
+### GIS reliability
+- Add file-mode checked clipping with versioned snapshots, explicit geometry, independent full-domain QA and immutable run IDs.
+- Fix RasterCalculator binding/save, add strict unmapped-value checks, explicit environment states, and existence-only verification labels. See [scope and limitations](docs/GIS_RELIABILITY.md).
+
+
 ### Changed
 - Ordinary project, map, and data writes are now enabled when
   `ARCGIS_PRO_MCP_ALLOW_WRITE` is unset. Set it to `0`, `false`, `no`, or `off`

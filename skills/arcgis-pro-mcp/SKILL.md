@@ -50,6 +50,8 @@ Read [references/security-and-paths.md](references/security-and-paths.md) before
 
 For a mutating workflow: read/preflight, execute the narrow operation once, inspect the structured result and GP messages, then independently re-read the affected state or verify the output artifact.
 
+For checked raster clipping and quality evidence, read [references/analysis-validation.md](references/analysis-validation.md). Execution success and file existence are not analysis acceptance.
+
 ## Runtime Boundary And Deliberate Limits
 
 Real ArcPy execution requires Windows, ArcGIS Pro, and an ArcGIS Pro Python environment with `arcpy`. Ordinary Python validation can prove syntax and mocked policy behavior, not real Pro, extension, enterprise, Portal, or data-lock behavior.

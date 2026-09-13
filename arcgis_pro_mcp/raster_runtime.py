@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from arcgis_pro_mcp.analysis_quality import existence_evidence, finite_number
 from arcgis_pro_mcp.paths import (
     is_probably_path,
     require_allow_write,
@@ -89,6 +90,17 @@ def validate_environment(environment: dict[str, Any] | None) -> dict[str, Any]:
         raise RuntimeError(f"不支持的环境参数：{unknown}")
     normalized: dict[str, Any] = {}
     for public_name, value in environment.items():
+        if isinstance(value, dict):
+            state = value.get("state")
+            if state == "UNSET" and set(value) == {"state"}:
+                continue
+            if state == "CLEAR" and set(value) == {"state"}:
+                normalized[_ENV_KEYS[public_name]] = None
+                continue
+            if state != "VALUE" or set(value) != {"state", "value"} or value["value"] in (None, ""):
+                raise RuntimeError("环境契约须为 UNSET、CLEAR 或带非空 value 的 VALUE")
+            value = value["value"]
+        # Preserve legacy null/empty as unset. Explicit CLEAR is the new contract.
         if value is None or value == "":
             continue
         if public_name in _PATH_ENV_KEYS:
@@ -102,9 +114,7 @@ def validate_environment(environment: dict[str, Any] | None) -> dict[str, Any]:
         ):
             value = validate_input_path_optional(value, public_name)
         elif public_name == "cell_size" and isinstance(value, (int, float)):
-            if float(value) <= 0:
-                raise RuntimeError("cell_size 必须大于 0")
-            value = float(value)
+            value = finite_number(value, "cell_size", positive=True)
         elif public_name == "parallel_processing_factor":
             value = str(value).strip()
             if not value or len(value) > 32:
@@ -164,7 +174,7 @@ def raster_info(arcpy: Any, raster_path: str) -> dict[str, Any]:
         "band_count": getattr(desc, "bandCount", None),
         "pixel_type": getattr(desc, "pixelType", None),
         "compression_type": getattr(desc, "compressionType", None),
-        "has_raster_attribute_table": bool(getattr(desc, "hasRAT", False)),
+        "has_raster_attribute_table": getattr(desc, "hasRAT", None),
         "mean_cell_width": getattr(desc, "meanCellWidth", None),
         "mean_cell_height": getattr(desc, "meanCellHeight", None),
         "no_data_value": getattr(desc, "noDataValue", None),
@@ -174,6 +184,7 @@ def raster_info(arcpy: Any, raster_path: str) -> dict[str, Any]:
         payload["spatial_reference"] = {
             "name": getattr(spatial_reference, "name", None),
             "factory_code": getattr(spatial_reference, "factoryCode", None),
+            "wkt": spatial_reference.exportToString() if callable(getattr(spatial_reference, "exportToString", None)) else None,
         }
     properties: dict[str, str] = {}
     for name in ("MINIMUM", "MAXIMUM", "MEAN", "STD", "VALUETYPE", "BANDCOUNT", "CELLSIZEX", "CELLSIZEY"):
@@ -195,7 +206,7 @@ def _save_and_verify(arcpy: Any, raster: Any, output_path: str) -> dict[str, Any
     exists = getattr(arcpy, "Exists", None)
     if callable(exists) and not bool(exists(output_path)):
         raise RuntimeError(f"栅格输出未创建：{output_path}")
-    return {"output_raster": output_path, "exists": True, "verified": True}
+    return {"output_raster": output_path, **existence_evidence(bool(exists(output_path)) if callable(exists) else None)}
 
 
 def run_fill(

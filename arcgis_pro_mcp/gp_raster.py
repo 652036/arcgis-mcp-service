@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import ast
+import math
+import os
+import re
 from typing import Any
 
+from arcgis_pro_mcp.analysis_quality import finite_number, rectangle_values
 from arcgis_pro_mcp.paths import (
     require_allow_write,
     require_gp_output_root_mandatory,
@@ -11,6 +16,7 @@ from arcgis_pro_mcp.paths import (
     validate_input_path_optional,
     validate_output_name,
 )
+from arcgis_pro_mcp.raster_runtime import scoped_environment
 
 
 def run_slope(
@@ -59,6 +65,8 @@ def run_reclassify(
     reclass_field: str,
     remap: str,
     out_raster: str,
+    missing_values: str = "DATA",
+    remap_mode: str = "RANGE",
 ) -> None:
     require_allow_write()
     require_gp_output_root_mandatory()
@@ -70,10 +78,13 @@ def run_reclassify(
     rm = remap.strip()
     if not rm:
         raise RuntimeError("remap 不能为空（如 \"0 10 1;10 20 2;20 30 3\"）")
+    mode = remap_mode.upper()
+    if mode not in {"RANGE", "VALUE"}:
+        raise RuntimeError("remap_mode must be RANGE or VALUE")
     ranges: list[list[int | float]] = []
     for part in rm.split(";"):
         nums = [p for p in part.replace(",", " ").split() if p]
-        if len(nums) != 3:
+        if len(nums) != (3 if mode == "RANGE" else 2):
             raise RuntimeError("remap 每段须为 start end new_value，例如 \"0 10 1;10 20 2\"")
         try:
             # ArcPy 3.6 rejects floating-point output classes for integer rasters in
@@ -87,8 +98,52 @@ def run_reclassify(
             )
         except ValueError as e:
             raise RuntimeError("remap 数值无效") from e
-    result = arcpy.sa.Reclassify(inf, rf, arcpy.sa.RemapRange(ranges))
+    intervals = ranges if mode == "RANGE" else [[v, v, n] for v, n in ranges]
+    for start, end, new_value in intervals:
+        if not all(math.isfinite(v) for v in (start, end, new_value)) or start > end:
+            raise RuntimeError("remap bounds must be finite and increasing")
+        if int(new_value) != new_value:
+            raise RuntimeError("remap output categories must be integers")
+    ordered = sorted(intervals)
+    if any(b[0] < a[1] or (a[0] == a[1] == b[0]) for a, b in zip(ordered, ordered[1:], strict=False)):
+        raise RuntimeError("remap ranges overlap or values are duplicated")
+    mv = missing_values.upper()
+    if mv not in {"DATA", "NODATA", "ERROR"}:
+        raise RuntimeError("missing_values must be DATA, NODATA or ERROR")
+    if mv == "ERROR":
+        # Full input scan before ArcPy: output class checks alone cannot find
+        # unclassified values that accidentally equal an allowed output class.
+        from arcgis_pro_mcp.raster_checked import _backend, _raster
+        np, _gdal, _ogr, _osr = _backend()
+        ds, meta = _raster(inf)
+        band = ds.GetRasterBand(1)
+        mask = band.GetMaskBand()
+        missing = 0
+        for row in range(0, ds.RasterYSize, 512):
+            for col in range(0, ds.RasterXSize, 512):
+                w, h = min(512, ds.RasterXSize-col), min(512, ds.RasterYSize-row)
+                data = band.ReadAsArray(col, row, w, h)
+                valid = mask.ReadAsArray(col, row, w, h)
+                if data is None or valid is None:
+                    raise RuntimeError("REMAP_INPUT_READ_FAILED")
+                valid = (valid != 0) & np.isfinite(data)
+                matched = np.zeros(data.shape, dtype=bool)
+                for start, end, _new in ordered:
+                    matched |= (data >= start) & (data <= end)
+                missing += int((valid & ~matched).sum())
+        ds = None
+        if missing:
+            raise RuntimeError(f"UNMAPPED_INPUT_VALUES: {missing} valid cells have no mapping")
+        if meta["scale"] != 1 or meta["offset"] != 0:
+            raise RuntimeError("SCALED_RECLASS_INPUT_UNSUPPORTED: declare and materialize the value space first")
+    exists = getattr(arcpy, "Exists", None)
+    if os.path.lexists(out) or (callable(exists) and exists(out)):
+        raise RuntimeError("OUTPUT_ALREADY_EXISTS")
+    mapping = arcpy.sa.RemapRange(sorted(ranges)) if mode == "RANGE" else arcpy.sa.RemapValue(ranges)
+    # RemapRange assigns a shared endpoint to the lower interval (ArcGIS semantics).
+    result = arcpy.sa.Reclassify(inf, rf, mapping, "NODATA" if mv == "ERROR" else mv)
     result.save(out)
+
 
 
 def run_extract_by_mask(
@@ -96,14 +151,16 @@ def run_extract_by_mask(
     in_raster: str,
     in_mask_data: str,
     out_raster: str,
+    environment: dict[str, Any] | None = None,
 ) -> None:
     require_allow_write()
     require_gp_output_root_mandatory()
     inf = validate_input_path_optional(in_raster, "in_raster")
     mask = validate_input_path_optional(in_mask_data, "in_mask_data")
     out = validate_gp_output_path(out_raster, "out_raster")
-    result = arcpy.sa.ExtractByMask(inf, mask)
-    result.save(out)
+    with scoped_environment(arcpy, environment):
+        result = arcpy.sa.ExtractByMask(inf, mask)
+        result.save(out)
 
 
 def run_extract_by_attributes(
@@ -130,6 +187,7 @@ def run_zonal_statistics_as_table(
     in_value_raster: str,
     out_table: str,
     statistics_type: str = "ALL",
+    ignore_nodata: str = "DATA",
 ) -> None:
     require_allow_write()
     require_gp_output_root_mandatory()
@@ -140,7 +198,10 @@ def run_zonal_statistics_as_table(
     if not zf:
         raise RuntimeError("zone_field 不能为空")
     st = statistics_type.strip().upper()
-    arcpy.sa.ZonalStatisticsAsTable(zd, zf, vr, out, "DATA", st)
+    nd = ignore_nodata.upper()
+    if nd not in {"DATA", "NODATA"}:
+        raise RuntimeError("ignore_nodata 须为 DATA 或 NODATA")
+    arcpy.sa.ZonalStatisticsAsTable(zd, zf, vr, out, nd, st)
 
 
 def run_kernel_density(
@@ -299,6 +360,7 @@ def run_raster_calculator(
     arcpy: Any,
     expression: str,
     out_raster: str,
+    input_rasters: dict[str, str] | None = None,
 ) -> None:
     require_allow_write()
     require_gp_output_root_mandatory()
@@ -308,19 +370,45 @@ def run_raster_calculator(
         raise RuntimeError("expression 不能为空")
     if len(expr) > 8000:
         raise RuntimeError("expression 过长")
+    bindings = input_rasters or {}
+    if not isinstance(bindings, dict) or any(not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", k) for k in bindings):
+        raise RuntimeError("input_rasters 须为变量名到栅格路径的映射")
+    inputs = {k: validate_input_path_optional(v, k) for k, v in bindings.items()}
+    functions = {"Con", "IsNull", "Abs", "Int", "Float", "Square", "SquareRoot", "Exp", "Ln", "Log10", "Sin", "Cos", "Tan"}
+    if set(inputs) & functions:
+        raise RuntimeError("变量名不能与函数名称冲突")
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except (SyntaxError, RecursionError) as exc:
+        raise RuntimeError("expression 语法无效") from exc
+    allowed = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Compare, ast.Call, ast.Name, ast.Load,
+               ast.Constant, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod,
+               ast.USub, ast.UAdd, ast.Invert, ast.BitAnd, ast.BitOr,
+               ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+    for node in ast.walk(tree):
+        if not isinstance(node, allowed):
+            raise RuntimeError("expression 含不支持的语法；不允许任意代码、属性访问或索引")
+        if isinstance(node, ast.Constant):
+            finite_number(node.value, "expression constant")
+        if isinstance(node, ast.Name) and node.id not in inputs and node.id not in functions:
+            raise RuntimeError("expression 只能引用显式绑定的变量和受控函数")
+        if isinstance(node, ast.Call) and (not isinstance(node.func, ast.Name) or node.func.id not in functions or node.keywords):
+            raise RuntimeError("expression 含不支持的函数调用")
+    if callable(getattr(arcpy, "Exists", None)) and arcpy.Exists(out) or os.path.lexists(out):
+        raise RuntimeError("out_raster 已存在；拒绝隐式覆盖")
+    if inputs:
+        ia = getattr(arcpy, "ia", None)
+        calculator = getattr(ia, "RasterCalculator", None)
+        if not callable(calculator):
+            raise RuntimeError("当前版本不支持对象式 IA RasterCalculator；不会猜测备用签名")
+        result = calculator(list(inputs.values()), list(inputs), expr)
+        result.save(out)
+        return
     gp = getattr(arcpy, "gp", None)
     if gp is not None and hasattr(gp, "RasterCalculator_sa"):
         gp.RasterCalculator_sa(expr, out)
         return
-    ia = getattr(arcpy, "ia", None)
-    if ia is not None and hasattr(ia, "RasterCalculator"):
-        try:
-            ia.RasterCalculator(expr, out)
-            return
-        except TypeError:
-            ia.RasterCalculator([], expr, out)
-            return
-    raise RuntimeError("当前 ArcPy 没有 RasterCalculator")
+    raise RuntimeError("请显式提供 input_rasters 变量绑定；当前无受支持的旧式 GP 接口")
 
 
 def run_mosaic_to_new_raster(
@@ -350,17 +438,26 @@ def run_clip_raster(
     rectangle: str = "",
     in_template_dataset: str = "",
     clipping_geometry: bool = False,
+    environment: dict[str, Any] | None = None,
 ) -> None:
     require_allow_write()
     require_gp_output_root_mandatory()
     inf = validate_input_path_optional(in_raster, "in_raster")
     out = validate_gp_output_path(out_raster, "out_raster")
     rect = (rectangle or "").strip()
+    if rect:
+        try:
+            rectangle_values([float(x) for x in rect.split()])
+        except ValueError as exc:
+            raise RuntimeError("rectangle 须为四个有限数值") from exc
     tmpl = ""
     if in_template_dataset:
         tmpl = validate_input_path_optional(in_template_dataset, "in_template_dataset")
+    if clipping_geometry and not tmpl:
+        raise RuntimeError("多边形裁剪需要 in_template_dataset")
     cg = "ClippingGeometry" if clipping_geometry else "NONE"
-    arcpy.management.Clip(inf, rect or "#", out, tmpl or "#", "#", cg)
+    with scoped_environment(arcpy, environment):
+        arcpy.management.Clip(inf, rect or "#", out, tmpl or "#", "#", cg)
 
 
 def run_resample(

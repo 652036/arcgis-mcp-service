@@ -135,6 +135,8 @@ _READ_ACTIONS = {
 
 _READ_ONLY_EXACT = frozenset(
     {
+        "arcgis_pro_analysis_asset_info",
+        "arcgis_pro_analysis_result_status",
         "arcgis_pro_calculate_distance_band",
         "arcgis_pro_connection_repair_preflight",
         "arcgis_pro_da_table_sample",
@@ -268,6 +270,8 @@ _ENTERPRISE_WRITE_TOOLS = frozenset(
 
 _GP_OUTPUT_ROOT_TOOLS = frozenset(
     {
+        "arcgis_pro_gp_clip_raster_checked",
+        "arcgis_pro_analysis_result_status",
         "arcgis_pro_add_feature_class_to_topology",
         "arcgis_pro_add_rule_to_topology",
         "arcgis_pro_create_db_connection",

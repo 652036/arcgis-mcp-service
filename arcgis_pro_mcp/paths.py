@@ -139,7 +139,7 @@ def validate_new_output_in_export_root(output_path: str, label: str) -> str:
     return path
 
 
-def validate_gp_output_path(output_path: str, label: str) -> str:
+def validate_gp_output_path(output_path: str, label: str, *, create_parent: bool = True) -> str:
     """When ARCGIS_PRO_MCP_GP_OUTPUT_ROOT is set, outputs must stay under it."""
     p = normalize_path(output_path)
     require_absolute(p, label)
@@ -148,7 +148,7 @@ def validate_gp_output_path(output_path: str, label: str) -> str:
         rr = os.path.realpath(os.path.expanduser(root))
         raise RuntimeError(f"{label} 必须位于 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT 内：{rr}")
     parent = os.path.dirname(p)
-    if parent:
+    if parent and create_parent:
         os.makedirs(parent, exist_ok=True)
     return p
 

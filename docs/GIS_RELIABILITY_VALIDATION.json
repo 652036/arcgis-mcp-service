@@ -1,0 +1,249 @@
+{
+  "baseline_commit": "eb39cb32367e783f25cc1cb27f5bca4122360cbf",
+  "date": "2026-09-09",
+  "scope": "checked clipping first complete adapter plus targeted legacy raster fixes",
+  "full_pack_completed": false,
+  "arcpy_version": "3.6",
+  "verification": {
+    "ordinary_unit_assertion_tests_passed": 301,
+    "arcpy_integration_methods_passed": 6,
+    "gdal_metadata_methods_passed": 2,
+    "lint": "PASSED",
+    "compileall": "PASSED",
+    "stdio_tools_listed": 458,
+    "new_stdio_tool_catalog_checks_passed": 3
+  },
+  "native_cases": [
+    {
+      "case": "rectangle real zero valid",
+      "execution_status": "SUCCEEDED",
+      "qa_status": "PASSED",
+      "coverage": 1.0,
+      "eligible_for_downstream": true,
+      "coverage_metrics": {
+        "expected_cells": 100,
+        "valid_cells": 100,
+        "missing_cells": 0,
+        "coverage": 1.0,
+        "minimum": 1.0,
+        "complete_blocks_read": 1,
+        "failed_blocks": 0
+      },
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T11 strip strict",
+      "execution_status": "SUCCEEDED",
+      "qa_status": "FAILED",
+      "coverage": 0.9,
+      "eligible_for_downstream": false,
+      "coverage_metrics": {
+        "expected_cells": 100,
+        "valid_cells": 90,
+        "missing_cells": 10,
+        "coverage": 0.9,
+        "minimum": 1.0,
+        "complete_blocks_read": 1,
+        "failed_blocks": 0
+      },
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T12 explicit missing policy",
+      "execution_status": "SUCCEEDED",
+      "qa_status": "PASSED",
+      "coverage": 0.9,
+      "eligible_for_downstream": true,
+      "coverage_metrics": {
+        "expected_cells": 100,
+        "valid_cells": 90,
+        "missing_cells": 10,
+        "coverage": 0.9,
+        "minimum": 0.9,
+        "complete_blocks_read": 1,
+        "failed_blocks": 0
+      },
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T10 fixed denominator",
+      "execution_status": "SUCCEEDED",
+      "qa_status": "FAILED",
+      "coverage": 0.5,
+      "eligible_for_downstream": false,
+      "coverage_metrics": {
+        "expected_cells": 100,
+        "valid_cells": 50,
+        "missing_cells": 50,
+        "coverage": 0.5,
+        "minimum": 1.0,
+        "complete_blocks_read": 1,
+        "failed_blocks": 0
+      },
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T13 all NoData",
+      "execution_status": "SUCCEEDED",
+      "qa_status": "FAILED",
+      "coverage": 0.0,
+      "eligible_for_downstream": false,
+      "coverage_metrics": {
+        "expected_cells": 100,
+        "valid_cells": 0,
+        "missing_cells": 100,
+        "coverage": 0.0,
+        "minimum": 1.0,
+        "complete_blocks_read": 1,
+        "failed_blocks": 0
+      },
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T13 empty pixel-centre domain",
+      "execution_status": "FAILED",
+      "qa_status": "FAILED",
+      "coverage": null,
+      "eligible_for_downstream": false,
+      "test_assertions_passed": true,
+      "note": "Native Clip rejects the tiny AOI; this verifies ineligibility, not a successful independent zero-domain QA run."
+    },
+    {
+      "case": "T06 inherited mask extent",
+      "execution_status": "SUCCEEDED",
+      "qa_status": "PASSED",
+      "coverage": 1.0,
+      "eligible_for_downstream": true,
+      "coverage_metrics": {
+        "expected_cells": 100,
+        "valid_cells": 100,
+        "missing_cells": 0,
+        "coverage": 1.0,
+        "minimum": 1.0,
+        "complete_blocks_read": 1,
+        "failed_blocks": 0
+      },
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T39 before version change",
+      "execution_status": "SUCCEEDED",
+      "qa_status": "PASSED",
+      "coverage": 1.0,
+      "eligible_for_downstream": true,
+      "coverage_metrics": {
+        "expected_cells": 100,
+        "valid_cells": 100,
+        "missing_cells": 0,
+        "coverage": 1.0,
+        "minimum": 1.0,
+        "complete_blocks_read": 1,
+        "failed_blocks": 0
+      },
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T08 half pixel",
+      "execution_status": "NOT_STARTED",
+      "qa_status": "FAILED",
+      "coverage": null,
+      "eligible_for_downstream": false,
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T01 L shape",
+      "execution_status": "SUCCEEDED",
+      "qa_status": "PASSED",
+      "coverage": 1.0,
+      "eligible_for_downstream": true,
+      "coverage_metrics": {
+        "expected_cells": 75,
+        "valid_cells": 75,
+        "missing_cells": 0,
+        "coverage": 1.0,
+        "minimum": 1.0,
+        "complete_blocks_read": 1,
+        "failed_blocks": 0
+      },
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T02 hole",
+      "execution_status": "SUCCEEDED",
+      "qa_status": "PASSED",
+      "coverage": 1.0,
+      "eligible_for_downstream": true,
+      "coverage_metrics": {
+        "expected_cells": 84,
+        "valid_cells": 84,
+        "missing_cells": 0,
+        "coverage": 1.0,
+        "minimum": 1.0,
+        "complete_blocks_read": 1,
+        "failed_blocks": 0
+      },
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T03 islands",
+      "execution_status": "SUCCEEDED",
+      "qa_status": "PASSED",
+      "coverage": 1.0,
+      "eligible_for_downstream": true,
+      "coverage_metrics": {
+        "expected_cells": 8,
+        "valid_cells": 8,
+        "missing_cells": 0,
+        "coverage": 1.0,
+        "minimum": 1.0,
+        "complete_blocks_read": 1,
+        "failed_blocks": 0
+      },
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T15 shared endpoint",
+      "actual": [
+        1,
+        1,
+        3
+      ],
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T16 unmapped category",
+      "test_assertions_passed": true
+    },
+    {
+      "case": "T22 IA signature and saved output",
+      "actual": [
+        20,
+        21,
+        22
+      ],
+      "test_assertions_passed": true
+    }
+  ],
+  "additional_assertions": [
+    "repeated run ID does not rewrite output",
+    "changed plan cannot reuse run ID",
+    "renamed and moved failed output remains blocked within the same output-root registry",
+    "changed input invalidates previous qualification",
+    "custom CRS without authority code accepted; unknown CRS rejected",
+    "complex and 64-bit integer rasters rejected rather than silently cast"
+  ],
+  "not_validated_or_implemented": [
+    "GUI selection workflow",
+    "all-tool qualification enforcement",
+    "full projection/resampling grid adapter",
+    "network and enterprise analysis QA",
+    "model scientific suitability",
+    "runtime host reload/deployment to an already running client"
+  ],
+  "runtime_host_modified": false,
+  "notes": [
+    "The Windows TEMP long-path setting was normalized only inside the test process to avoid an existing short-path equality fixture failure.",
+    "ArcGIS emitted code-page 936 warnings; numeric synthetic assertions passed. No production datasets or projects were used.",
+    "This is not a claim that all 48 pack acceptance tests passed."
+  ]
+}

@@ -13,6 +13,7 @@ import os
 import re
 from typing import Any
 
+from arcgis_pro_mcp.analysis_quality import existence_evidence
 from arcgis_pro_mcp.paths import (
     is_probably_path,
     require_allow_destructive,
@@ -177,15 +178,14 @@ def _prepare_new_output(arcpy: Any, output_path: str, label: str) -> str:
 def _verify_output(arcpy: Any, output_path: str, label: str) -> dict[str, Any]:
     if not _exists(arcpy, output_path):
         raise RuntimeError(f"{label} 未创建或不可见：{output_path}")
-    return {"output_path": output_path, "exists": True, "verified": True}
+    return {"output_path": output_path, **existence_evidence(True)}
 
 
 def _verify_in_place(arcpy: Any, path: Any, label: str, result: Any) -> dict[str, Any]:
     _require_existing(arcpy, path, label)
     return {
         "output_path": path,
-        "exists": True,
-        "verified": True,
+        **existence_evidence(True),
         "messages": _messages(result),
     }
 

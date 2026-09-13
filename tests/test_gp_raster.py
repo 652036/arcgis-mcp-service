@@ -40,7 +40,7 @@ class RasterGeoprocessingTests(unittest.TestCase):
 
         remap_range.assert_called_once_with([[0, 10, 1], [10.5, 20, 2]])
         reclassify.assert_called_once_with(
-            os.path.normpath(str(source)), "Value", "remap-object"
+            os.path.normpath(str(source)), "Value", "remap-object", "DATA"
         )
         result.save.assert_called_once_with(os.path.normpath(str(output)))
 

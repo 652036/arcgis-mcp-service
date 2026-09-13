@@ -42,6 +42,7 @@ from arcgis_pro_mcp import (
     project_io,
     publishing,
     raster_advanced,
+    raster_checked,
     raster_runtime,
     schema_maintenance,
     sdk_bridge,
@@ -1212,6 +1213,14 @@ def arcgis_pro_server_capabilities() -> str:
             ),
             "project_roots_configured": bool(project_roots()),
             "generic_gp_enabled": gp_generic.generic_gp_enabled(),
+            "analysis_quality": {
+                "checker_version": "1.0", "checked_operations": ["clip_raster"],
+                "scope": "file-mode single-band north-up GeoTIFF; explicit rectangle or polygon file",
+                "asset_versions": "SHA256 dataset families", "runtime_mode": "FILE",
+                "required_checks": ["grid", "coverage", "outside_aoi", "values_preserved", "input_versions", "environment_restored"],
+                "unsupported": ["GUI selections", "multiband", "rotated grids", "implicit reprojection", "scientific model suitability"],
+                "legacy_tool_success_is_quality_qualification": False,
+            },
             "generic_gp_allowlist": gp_generic.generic_gp_allowlist(),
             **_window_status_fields(),
             "tools_read_only": tools_read,
@@ -5084,9 +5093,11 @@ def arcgis_pro_gp_reclassify(
     reclass_field: str,
     remap: str,
     out_raster: str,
+    missing_values: str = "DATA",
+    remap_mode: str = "RANGE",
 ) -> str:
     arcpy = _arcpy()
-    gp_raster.run_reclassify(arcpy, in_raster, reclass_field, remap, out_raster)
+    gp_raster.run_reclassify(arcpy, in_raster, reclass_field, remap, out_raster, missing_values, remap_mode)
     return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
 
 
@@ -5098,9 +5109,10 @@ def arcgis_pro_gp_extract_by_mask(
     in_raster: str,
     in_mask_data: str,
     out_raster: str,
+    environment: dict[str, Any] | None = None,
 ) -> str:
     arcpy = _arcpy()
-    gp_raster.run_extract_by_mask(arcpy, in_raster, in_mask_data, out_raster)
+    gp_raster.run_extract_by_mask(arcpy, in_raster, in_mask_data, out_raster, environment)
     return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
 
 
@@ -5128,10 +5140,11 @@ def arcgis_pro_gp_zonal_statistics_as_table(
     in_value_raster: str,
     out_table: str,
     statistics_type: str = "ALL",
+    ignore_nodata: str = "DATA",
 ) -> str:
     arcpy = _arcpy()
     gp_raster.run_zonal_statistics_as_table(
-        arcpy, in_zone_data, zone_field, in_value_raster, out_table, statistics_type
+        arcpy, in_zone_data, zone_field, in_value_raster, out_table, statistics_type, ignore_nodata
     )
     return _json_dumps({"ok": True, "out_table": normalize_path(out_table)})
 
@@ -5271,9 +5284,9 @@ def arcgis_pro_gp_feature_to_raster(
     name="arcgis_pro_gp_raster_calculator",
     description="",
 )
-def arcgis_pro_gp_raster_calculator(expression: str, out_raster: str) -> str:
+def arcgis_pro_gp_raster_calculator(expression: str, out_raster: str, input_rasters: dict[str, str] | None = None) -> str:
     arcpy = _arcpy()
-    gp_raster.run_raster_calculator(arcpy, expression, out_raster)
+    gp_raster.run_raster_calculator(arcpy, expression, out_raster, input_rasters)
     return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
 
 
@@ -5297,6 +5310,30 @@ def arcgis_pro_gp_mosaic_to_new_raster(
     )
 
 
+@mcp.tool(name="arcgis_pro_analysis_asset_info", description="Register a physical file version and GIS role for checked clipping. File mode; no GUI selection.")
+def arcgis_pro_analysis_asset_info(dataset_path: str, role: str, identity_basis: str, vector_layer: str = "") -> str:
+    return _json_dumps(raster_checked.asset_info(dataset_path, role, identity_basis, vector_layer))
+
+
+@mcp.tool(name="arcgis_pro_analysis_result_status", description="Revalidate checked-run evidence and file versions; never infer success from file existence.")
+def arcgis_pro_analysis_result_status(run_id: str) -> str:
+    return _json_dumps(raster_checked.result_status(run_id))
+
+
+@mcp.tool(name="arcgis_pro_gp_clip_raster_checked", description="File-mode single-band north-up GeoTIFF clip with explicit AOI, reference grid, immutable run ID and full-domain quality checks.")
+def arcgis_pro_gp_clip_raster_checked(
+    run_id: str, source_asset: dict[str, Any], grid_asset: dict[str, Any],
+    clip_mode: str, minimum_coverage: float, boundary_asset: dict[str, Any] | None = None,
+    rectangle: list[float] | None = None, rectangle_crs: str = "",
+    missing_data_reason: str = "", validity: dict[str, Any] | None = None,
+    maximum_output_cells: int = 100_000_000,
+) -> str:
+    return _json_dumps(raster_checked.run_clip_checked(
+        _arcpy(), run_id, source_asset, grid_asset, clip_mode, minimum_coverage,
+        boundary_asset, rectangle, rectangle_crs, missing_data_reason, validity, maximum_output_cells,
+    ))
+
+
 @mcp.tool(
     name="arcgis_pro_gp_clip_raster",
     description="",
@@ -5307,10 +5344,11 @@ def arcgis_pro_gp_clip_raster(
     rectangle: str = "",
     in_template_dataset: str = "",
     clipping_geometry: bool = False,
+    environment: dict[str, Any] | None = None,
 ) -> str:
     arcpy = _arcpy()
     gp_raster.run_clip_raster(
-        arcpy, in_raster, out_raster, rectangle, in_template_dataset, clipping_geometry
+        arcpy, in_raster, out_raster, rectangle, in_template_dataset, clipping_geometry, environment
     )
     return _json_dumps({"ok": True, "out_raster": normalize_path(out_raster)})
 
