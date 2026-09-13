@@ -1,74 +1,78 @@
 # ArcGIS Pro MCP
 
-让 MCP 客户端在明确的权限和路径边界内调用 ArcPy，并在需要时接入正在运行的 ArcGIS Pro。项目同时支持磁盘工程处理、Python `CURRENT` 窗口宿主，以及可选的 ArcGIS Pro SDK 原生控制面。
+**English** | [简体中文](README.zh-CN.md)
 
-2.0 版提供 400+ 个已注册工具，覆盖工程、地图、图层、布局、数据、制图、栅格、LAS、空间统计、网络、企业地理数据库、发布和实时窗口控制。这个数字会随版本变化；请始终以 `arcgis_pro_server_capabilities()` 和 `arcgis_pro_tool_info()` 的运行时结果为准。
+Use ArcPy from an MCP client within explicit permission and path boundaries, and attach to a running ArcGIS Pro session when needed. The project supports project files on disk, a Python `CURRENT` host inside Pro, and an optional native ArcGIS Pro SDK control interface.
 
-> 项目状态：Beta。真实 GIS 执行需要 Windows、ArcGIS Pro，以及能够 `import arcpy` 的 ArcGIS Pro Python 环境。仓库采用 MIT License。
+Version 2.0 provides 400+ registered tools for projects, maps, layers, layouts, data, cartography, rasters, LAS, spatial analysis, networks, enterprise geodatabases, publishing, and live-window control. The count changes with releases; use `arcgis_pro_server_capabilities()` and `arcgis_pro_tool_info()` as the runtime source of truth.
 
-[快速开始](#快速开始) · [三种执行模式](#三种执行模式) · [Python 当前窗口](#接入-python-current-窗口) · [SDK 原生控制](#sdk-add-in-原生控制) · [安全配置](#安全模型) · [能力范围](#能力范围) · [故障排查](#故障排查)
+> Status: Beta. Real GIS execution requires Windows, ArcGIS Pro, and an ArcGIS Pro Python environment that can `import arcpy`. Licensed under the MIT License.
 
-新增：[GIS 可靠性修复与验收范围](docs/GIS_RELIABILITY.md)，包括显式裁剪模式、完整范围覆盖检查和结果资格门禁。
+[Quick start](#quick-start) · [Execution modes](#execution-modes) · [Python CURRENT](#attach-to-the-python-current-host) · [SDK control](#native-control-with-the-sdk-add-in) · [Security](#security-model) · [Capabilities](#capabilities) · [Troubleshooting](#troubleshooting)
 
-## 三种执行模式
+Recent work includes explicit clipping modes, full-extent coverage checks, and result qualification gates. See [GIS reliability scope and limitations](docs/GIS_RELIABILITY.md) (Chinese).
 
-三种模式解决的是不同问题，不会相互静默降级：
+## Execution modes
 
-| 模式 | 调用标识 | 执行位置 | 适用场景 | 影响已打开窗口 |
+Each mode serves a distinct purpose. Requests never silently fall back to another mode.
+
+| Mode | Request identifier | Execution environment | Typical use | Controls the open Pro window |
 | --- | --- | --- | --- | --- |
-| 文件模式 | 允许范围内的绝对 `.aprx` 路径 | 独立 ArcGIS Pro Python 进程 | 批处理、工程检查、数据生产、导出 | 否 |
-| Python `CURRENT` 宿主 | 精确值 `aprx_path="CURRENT"` | ArcGIS Pro 内运行的 Python 宿主 | 当前工程、活动视图、选择、布局、刷新和大部分既有工具 | 是 |
-| SDK Add-In | 不透明 `sdk_session_ref` | ArcGIS Pro SDK Add-In | 原生事件、DrawComplete、相机/时间、可取消 GP、Undo/Redo、`EditOperation` | 是 |
+| Project file | Allowed absolute `.aprx` path | Separate ArcGIS Pro Python process | Batch processing, project inspection, data production, export | No |
+| Python `CURRENT` host | Exact value `aprx_path="CURRENT"` | Python host running inside ArcGIS Pro | Current project, active view, selections, layouts, refresh, and most existing tools | Yes |
+| SDK Add-In | Opaque `sdk_session_ref` | ArcGIS Pro SDK Add-In | Native events, DrawComplete, camera/time, cancellable GP, Undo/Redo, `EditOperation` | Yes |
 
 ```text
-MCP 客户端
-    │ stdio
-    ▼
-ArcGIS Pro MCP 服务
-    ├─ 绝对 .aprx ───────────────► 独立 ArcPy：文件模式
-    ├─ aprx_path=CURRENT ────────► Python 宿主 v4：当前窗口
-    └─ arcgis_pro_sdk_* ─────────► SDK Add-In：租约 / 事件 / 原生编辑
+MCP client
+    | stdio
+    v
+ArcGIS Pro MCP server
+    +-- absolute .aprx ---------> Separate ArcPy process: project-file mode
+    +-- aprx_path=CURRENT ------> Python host v4: current Pro window
+    +-- arcgis_pro_sdk_* -------> SDK Add-In: leases / events / native edits
 ```
 
-绝对 `.aprx` 永远按文件模式处理。只有显式传入 `CURRENT` 才路由到 Python 宿主；宿主失联、重启或工程切换时会失败关闭，不会转而修改磁盘工程。实时接入有两条明确路径：Python 工具箱/脚本适合复用现有 `arcpy.mp` 工具，SDK Add-In 适合原生事件、响应式界面和 `EditOperation`。两者使用独立的发现、鉴权与控制协议，也不会自动取得当前工程的控制权。
+Absolute `.aprx` paths always use project-file mode. Only an explicit `CURRENT` request reaches the Python host. A disconnected or restarted host, or a changed project, causes the request to fail closed instead of modifying a project file on disk.
 
-更完整的协议说明见 [实时窗口控制架构](docs/WINDOW_CONTROL.md)。
+For live control, the Python toolbox/script reuses existing `arcpy.mp` tools; the SDK Add-In provides native events, responsive UI operations, and `EditOperation`. They have separate discovery, authentication, and control protocols. Neither automatically takes control of the current project.
 
-## 能力范围
+See [live-window control architecture (Chinese)](docs/WINDOW_CONTROL.md) for protocol details.
 
-运行时工具目录会给每个工具标注只读/写入、所需路径根、窗口要求和额外门禁。当前主要覆盖：
+## Capabilities
 
-- 工程与目录：发现/摘要、导入文档、保存副本、缓存释放、连接修复、MAPX/LYRX。
-- 地图与制图：地图、图层、独立表、布局、地图框、书签、报表、图表、标注、符号系统、CIM 受控写入和导出。
-- 表与要素：字段/域/索引、受约束的 `arcpy.da` 查询和写入、选择集、关系、编辑器追踪、GlobalID、属性规则、字段组和条件值。
-- 矢量与空间分析：裁剪、叠加、缓冲、连接、转换、空间统计、回归、聚类、时空立方体和预测。
-- 栅格与地形：栅格属性、统计量、金字塔、NoData、地图代数、水文/距离分析、镶嵌数据集、LAS 数据集与金字塔。
-- 网络与定位：本地网络数据集的路线、服务区、最近设施和 OD 成本矩阵；本地 locator 的批量与反向地理编码。
-- 企业能力：企业地理数据库连接、版本化、协调/提交、数据维护、Utility Network 查询/验证/追踪/子网更新与导出。
-- 发布：共享草稿、服务定义暂存与发布，并对 Portal/Server、公开共享及覆盖发布分别设门禁。
-- 实时控制：Python `CURRENT` 视图和选择操作；SDK 活动上下文、事件、相机、时间、原生编辑和可取消的白名单 GP 作业。
+The runtime tool catalog identifies read/write behavior, required path roots, live-window requirements, and additional permission gates. Main areas include:
 
-本项目不是任意 Python、任意 CIM、任意 GP 或桌面鼠标点击代理。通用 GP 默认关闭；SDK 也只接受代码中已有的 typed contract。
+- Projects and catalogs: discovery, summaries, document import, project copies, cache release, connection repair, MAPX/LYRX.
+- Maps and cartography: maps, layers, standalone tables, layouts, map frames, bookmarks, reports, charts, labels, symbology, controlled CIM writes, and export.
+- Tables and features: fields, domains, indexes, constrained `arcpy.da` queries and writes, selections, relationships, editor tracking, GlobalIDs, attribute rules, field groups, and contingent values.
+- Vector and spatial analysis: clip, overlay, buffer, join, conversion, spatial statistics, regression, clustering, space-time cubes, and forecasting.
+- Rasters and terrain: properties, statistics, pyramids, NoData, map algebra, hydrology/distance analysis, mosaic datasets, LAS datasets, and pyramids.
+- Networks and geocoding: routes, service areas, closest facilities, and OD cost matrices using local network datasets; batch and reverse geocoding with local locators.
+- Enterprise data: geodatabase connections, versioning, reconcile/post, maintenance, Utility Network queries, validation, tracing, subnetworks, and export.
+- Publishing: sharing drafts, service-definition staging, and publishing with separate gates for Portal/Server targets, public sharing, and service overwrites.
+- Live control: Python `CURRENT` views and selections; SDK active context, events, camera, time, native edits, and cancellable allowlisted GP jobs.
 
-## 环境要求
+This project does not provide arbitrary Python, CIM, or geoprocessing execution, or general desktop mouse automation. Generic GP is disabled by default. The SDK accepts only the typed contracts implemented in the code.
 
-- Windows（遵循目标 ArcGIS Pro 版本的系统要求）
-- ArcGIS Pro 及其自带或克隆的 Python 环境
-- Python 3.10+
-- `mcp>=1.20,<2`
-- 构建可选 SDK Add-In 时：ArcGIS Pro 3.6、.NET 8/Visual Studio 2022 和 ArcGIS Pro SDK for .NET 3.6
+## Requirements
 
-常见解释器位置如下；安装目录和环境名称可能不同：
+- Windows, meeting the system requirements of the target ArcGIS Pro version.
+- ArcGIS Pro and its bundled or cloned Python environment.
+- Python 3.10+.
+- `mcp>=1.20,<2`.
+- For the optional SDK Add-In: ArcGIS Pro 3.6, .NET 8 / Visual Studio 2022, and ArcGIS Pro SDK for .NET 3.6.
+
+A typical Python location is shown below; installation paths and environment names may differ:
 
 ```text
 C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe
 ```
 
-## 快速开始
+## Quick start
 
-### 1. 安装
+### 1. Install
 
-推荐在 ArcGIS Pro 克隆的可写 Python 环境中安装：
+Use a writable cloned ArcGIS Pro Python environment:
 
 ```powershell
 git clone https://github.com/652036/arcgis-mcp-service.git
@@ -77,11 +81,11 @@ python -m pip install -e .
 python -c "import arcpy; print(arcpy.GetInstallInfo()['Version'])"
 ```
 
-服务使用 stdio。手动执行 `python -m arcgis_pro_mcp` 适合排错；正常情况下由 MCP 客户端启动。
+The server communicates over stdio. Running `python -m arcgis_pro_mcp` manually is useful for troubleshooting; normally the MCP client launches it.
 
-### 2. 配置 MCP 客户端
+### 2. Configure your MCP client
 
-下面是通用 `mcpServers` 示例。请替换为自己的解释器、仓库和最小必要数据目录，不要把本机凭据或真实内部路径提交到公开仓库。
+The following is a generic `mcpServers` example. Replace the interpreter, repository, and data paths with your own values and grant access only to the directories you need. Do not commit local credentials or real internal paths to a public repository.
 
 ```json
 {
@@ -105,26 +109,26 @@ python -c "import arcpy; print(arcpy.GetInstallInfo()['Version'])"
 }
 ```
 
-多个输入或工程根目录使用 Windows 的路径分隔符 `;`。配置变更后应重启 MCP 客户端；Python 窗口宿主也需要重新接入，才能收到新的策略快照。
+Separate multiple input or project roots with `;` on Windows. Restart the MCP client after changing configuration. Reattach the Python host so that it receives the updated policy snapshot.
 
-### 3. 探测实际能力
+### 3. Discover runtime capabilities
 
-每次会话先调用：
+Start each session with:
 
 ```text
 arcgis_pro_environment_info()
 arcgis_pro_server_capabilities()
 ```
 
-查看某个工具的完整 schema、风险和前置条件：
+Inspect a tool's full schema, risks, and prerequisites:
 
 ```text
 arcgis_pro_tool_info(name="arcgis_pro_network_solve_route")
 ```
 
-不要依赖 README 中的静态工具清单。`arcgis_pro_server_capabilities()` 会返回当前注册工具、只读/写入分类、路径要求、附加门禁和窗口状态。
+Use the runtime catalog instead of a static README tool list. `arcgis_pro_server_capabilities()` returns registered tools, read/write classifications, path requirements, extra gates, and window status.
 
-### 4. 文件模式示例
+### 4. Work with a project file
 
 ```text
 arcgis_pro_project_summary(aprx_path="C:\\GIS_Projects\\demo.aprx")
@@ -132,41 +136,41 @@ arcgis_pro_list_maps(aprx_path="C:\\GIS_Projects\\demo.aprx")
 arcgis_pro_list_layers(aprx_path="C:\\GIS_Projects\\demo.aprx", map_name="Map")
 ```
 
-文件模式适合自动化和可重复生产，但它没有“当前活动窗格”语义，也不会让用户眼前的地图立即变化。
+Project-file mode supports automation and reproducible processing. It does not represent the active pane or immediately update the map visible in Pro.
 
-## 接入 Python `CURRENT` 窗口
+## Attach to the Python CURRENT host
 
-Python 宿主能复用大量现有 `aprx_path` 工具，是接入当前工程最简单的方式。
+The Python host reuses many tools with an `aprx_path` parameter and is the simplest way to attach to the current project.
 
-1. 在 ArcGIS Pro 中打开并保存目标工程。
-2. 在 Catalog 中添加仓库根目录的 `接入当前窗口.pyt`，运行“接入当前窗口”并保持运行。
-3. 调用 `arcgis_pro_window_status()`。
-4. 要求 `window_attached=true`、`host_ready=true`、`target_confirmed=true`，并人工核对 `current_project`。
-5. 用 `arcgis_pro_active_view_info(aprx_path="CURRENT")` 做只读 smoke test。
-6. 只有操作眼前窗口时，后续工具才传 `aprx_path="CURRENT"`。
+1. Open and save the target project in ArcGIS Pro.
+2. Add `接入当前窗口.pyt` from the repository root to Catalog. Run the tool named “接入当前窗口” (attach to the current window) and leave it running.
+3. Call `arcgis_pro_window_status()`.
+4. Require `window_attached=true`, `host_ready=true`, and `target_confirmed=true`. Check that `current_project` is the intended project.
+5. Run a read-only smoke test with `arcgis_pro_active_view_info(aprx_path="CURRENT")`.
+6. Pass `aprx_path="CURRENT"` only when you intend to control the open Pro window.
 
-窗口启动器会优先使用仓库根目录 `.arcgis-pro-mcp-deps` 中的兼容 FastMCP，避免修改 ArcGIS Pro 的系统环境。若启动时报 `No module named 'mcp'`，在 PowerShell 中运行（按实际路径替换）：
+The launcher prefers a compatible FastMCP installation in the repository's `.arcgis-pro-mcp-deps` directory to avoid changing Pro's system environment. If startup reports `No module named 'mcp'`, run the following in PowerShell with your actual paths:
 
 ```powershell
 & "C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe" -m pip install --target "C:\path\to\arcgis-mcp-service\.arcgis-pro-mcp-deps" "mcp>=1.20,<2"
 ```
 
-安装后重新运行“接入当前窗口”即可，不需要用 `ArcGISPro.exe -m pip`。
+Run the attachment tool again after installation. Do not use `ArcGISPro.exe -m pip`.
 
-也可在 ArcGIS Pro 的 Python 窗口中启动：
+You can also launch the host from the ArcGIS Pro Python window:
 
 ```python
 import runpy
 runpy.run_path(r"C:\path\to\arcgis-mcp-service\接入当前窗口.py")
 ```
 
-协议 v4 使用随机会话令牌、仅本机 loopback、原子私有发现文件、目标工程锁存、有界串行队列、排队取消和 job/event 状态。Windows 发现状态位于当前用户的 `%LOCALAPPDATA%\ArcGISProMcp\window-host`，写入时使用受保护的当前用户 ACL；读取方拒绝链接/reparse point、异常大小、错误所有者或非私有 DACL。它是本机能力凭据，不应复制、共享或提交。工程切换、宿主重启或 session 变化后，必须重新调用 `arcgis_pro_window_status()` 确认目标。
+Protocol v4 uses random session tokens, loopback-only networking, atomic private discovery files, a locked target project, a bounded serial queue, queued cancellation, and job/event status. On Windows, discovery state is stored under the current user's `%LOCALAPPDATA%\ArcGISProMcp\window-host` with protected user ACLs. Readers reject links/reparse points, unexpected sizes, incorrect owners, and non-private DACLs. These files contain local capability credentials: do not copy, share, or commit them. Call `arcgis_pro_window_status()` again after a project change, host restart, or session change.
 
-Python 工具/窗口运行在 Pro foreground，适合 Agent 在一段时间内独占控制；长任务期间 Pro 交互可能受限。需要持续事件、原生 Undo/Redo、DrawComplete 或可取消后台作业时，使用 SDK Add-In。
+The Python tool/window runs in Pro's foreground and suits periods of exclusive agent control. Long jobs can limit Pro interaction. Use the SDK Add-In for continuous events, native Undo/Redo, DrawComplete, or cancellable background jobs.
 
-## SDK Add-In 原生控制
+## Native control with the SDK Add-In
 
-仓库的 [`sdk/ArcGISProMcp.AddIn`](sdk/ArcGISProMcp.AddIn) 包含 ArcGIS Pro 3.6 Add-In 源码。它需要单独构建和安装，不会因安装 Python 包而自动加载：
+[`sdk/ArcGISProMcp.AddIn`](sdk/ArcGISProMcp.AddIn) contains the ArcGIS Pro 3.6 Add-In source. Build and install it separately; installing the Python package does not load the Add-In:
 
 ```powershell
 Set-Location sdk\ArcGISProMcp.AddIn
@@ -174,9 +178,9 @@ dotnet restore .\ArcGISProMcp.AddIn.csproj
 dotnet build .\ArcGISProMcp.AddIn.csproj -c Release
 ```
 
-Add-In 只监听 `127.0.0.1` 的系统分配端口，使用每次加载生成的随机 bearer/session token，并将发现文件限制为当前 Windows 用户。MCP 响应不会暴露 token 或 lease secret。
+The Add-In listens only on `127.0.0.1` at a system-assigned port, generates random bearer/session tokens each time it loads, and restricts discovery files to the current Windows user. MCP responses do not expose tokens or lease secrets.
 
-典型工作流：
+A typical workflow is:
 
 ```text
 arcgis_pro_sdk_bridge_status()
@@ -187,98 +191,98 @@ arcgis_pro_sdk_wait_events(...)
 arcgis_pro_sdk_release_project_lease(...)
 ```
 
-租约绑定一个精确、已保存的 `.aprx`，默认 45 秒，可续期，且同一 Add-In 同时只有一个控制者。工程切换、租约过期、Add-In 重启或 URI 不匹配会失败关闭。
+A lease binds to one exact, saved `.aprx`, lasts 45 seconds by default, and can be renewed. Only one controller can hold the Add-In lease at a time. A changed project, expired lease, Add-In restart, or URI mismatch fails closed.
 
-SDK 原生控制提供：
+Native SDK control provides:
 
-- 活动视图、相机、图层、选择摘要、时间和多组 generation 的一致快照；
-- 相机、按 URI 缩放、刷新并等待 DrawComplete、时间范围和打开已加载表；
-- 活动窗格、相机、选择、编辑、绘制、时间及工程事件的有界长轮询；
-- `EditOperation` 创建/修改/删除、原生 Undo/Redo、保存/丢弃编辑；
-- 严格 typed contract、双 allowlist 和输入/输出路径约束下的异步 GP job、状态与协作取消。
+- Consistent snapshots of the active view, camera, layers, selection summaries, time, and multiple generation counters.
+- Camera updates, zoom by URI, refresh with DrawComplete waiting, time ranges, and opening loaded tables.
+- Bounded long polling for pane, camera, selection, edit, draw, time, and project events.
+- `EditOperation` create/update/delete operations, native Undo/Redo, and save/discard editing.
+- Asynchronous GP jobs, status, and cooperative cancellation within typed contracts, dual allowlists, and input/output path constraints.
 
-SDK 写请求使用 `expectedMapUri`、context/selection/edit generation、选择数量及 OID digest 做 compare-and-swap。收到冲突时先重新读取上下文，不要盲目重试。完整端点和请求契约见 [SDK bridge README](sdk/ArcGISProMcp.AddIn/README.md)。
+SDK write requests use `expectedMapUri`, context/selection/edit generations, selection counts, and OID digests for compare-and-swap checks. Read the context again after a conflict before retrying. See the [SDK bridge README](sdk/ArcGISProMcp.AddIn/README.md) for endpoints and request contracts.
 
-## 安全模型
+## Security model
 
-普通读写默认开启；设置 `ARCGIS_PRO_MCP_ALLOW_WRITE=0` 可显式切换为只读。其余高风险开关默认关闭，基础写入权限也不是万能授权；删除、发布、企业维护、CIM 与 SDK 编辑仍必须同时满足更窄的门禁、精确目标确认和路径策略。
+Ordinary reads and writes are enabled by default. Set `ARCGIS_PRO_MCP_ALLOW_WRITE=0` to make the server read-only. Other high-risk gates default to disabled. Deletion, publishing, enterprise maintenance, CIM operations, and SDK editing also require their narrower gates, exact target confirmation, and path policies.
 
-| 配置 | 作用 |
+| Setting | Purpose |
 | --- | --- |
-| `ARCGIS_PRO_MCP_ALLOW_WRITE` | 普通写入总开关，默认开启；设为 `0`、`false`、`no` 或 `off` 可关闭 |
-| `ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE=1` | 删除、覆盖、丢弃编辑等破坏性操作 |
-| `ARCGIS_PRO_MCP_ALLOW_CIM_WRITE=1` | 原始 CIM 写入 |
-| `ARCGIS_PRO_MCP_ALLOW_ENTERPRISE_WRITE=1` | 企业版本管理、维护和 Utility Network 管理操作；不替代普通要素/行编辑授权 |
-| `ARCGIS_PRO_MCP_ALLOW_PUBLISH=1` | 发布操作 |
-| `ARCGIS_PRO_MCP_ALLOW_PUBLIC_SHARE=1` | 向 `EVERYONE` 共享 |
-| `ARCGIS_PRO_MCP_ALLOW_PUBLISH_OVERWRITE=1` | 覆盖既有发布服务 |
-| `ARCGIS_PRO_MCP_ALLOW_INLINE_DB_PASSWORD=1` | 允许显式内联数据库密码；默认应使用环境变量或连接文件 |
-| `ARCGIS_PRO_MCP_DB_INSTANCE_ALLOWLIST` | `平台|实例` 形式的精确数据库目标白名单；创建 `.sde` 时必须配置 |
-| `ARCGIS_PRO_MCP_DB_USERNAME` / `ARCGIS_PRO_MCP_DB_PASSWORD` | 创建数据库连接专用的固定凭据变量；工具不能自行指定其他环境变量名 |
-| `ARCGIS_PRO_MCP_INPUT_ROOTS` | 限制允许读取的数据根目录 |
-| `ARCGIS_PRO_MCP_PROJECT_ROOTS` | 限制 `.aprx` 根目录；未设置时回退到输入根 |
-| `ARCGIS_PRO_MCP_EXPORT_ROOT` | 约束地图、布局、报表、图表及审计导出 |
-| `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` | 写入型 GP 的强制输出根目录 |
-| `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP=1` + `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` | Python 通用 GP 的双重开关 |
-| `ARCGIS_PRO_MCP_PORTAL_ALLOWLIST` / `ARCGIS_PRO_MCP_SERVER_ALLOWLIST` | 发布和企业连接目标限制 |
-| `ARCGIS_PRO_MCP_SDK_GP_ALLOWLIST` / `ARCGIS_PRO_MCP_SDK_GP_ENV_ALLOWLIST` | SDK GP 工具和环境白名单 |
-| `ARCGIS_PRO_MCP_SDK_ALLOW_EDIT_COMMANDS=1` | SDK Undo/Redo/保存类编辑命令 |
-| `ARCGIS_PRO_MCP_SDK_ALLOW_FEATURE_EDITS=1` | SDK 原生要素创建/修改/删除 |
-| `ARCGIS_PRO_MCP_SDK_ALLOW_DISCARD_EDITS=1` | SDK 丢弃全部待保存编辑 |
-| `ARCGIS_PRO_MCP_HOST_PORT` | 将一个 Python `CURRENT` 宿主绑定到一个显式 loopback 端口 |
+| `ARCGIS_PRO_MCP_ALLOW_WRITE` | General write gate, enabled by default; disable with `0`, `false`, `no`, or `off` |
+| `ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE=1` | Destructive operations such as delete, overwrite, and discard |
+| `ARCGIS_PRO_MCP_ALLOW_CIM_WRITE=1` | Raw CIM writes |
+| `ARCGIS_PRO_MCP_ALLOW_ENTERPRISE_WRITE=1` | Enterprise versioning, maintenance, and Utility Network administration; does not replace ordinary feature/row write authorization |
+| `ARCGIS_PRO_MCP_ALLOW_PUBLISH=1` | Publishing operations |
+| `ARCGIS_PRO_MCP_ALLOW_PUBLIC_SHARE=1` | Sharing with `EVERYONE` |
+| `ARCGIS_PRO_MCP_ALLOW_PUBLISH_OVERWRITE=1` | Overwriting existing published services |
+| `ARCGIS_PRO_MCP_ALLOW_INLINE_DB_PASSWORD=1` | Explicit inline database passwords; prefer environment variables or connection files |
+| `ARCGIS_PRO_MCP_DB_INSTANCE_ALLOWLIST` | Exact database targets in `platform\|instance` format; required when creating `.sde` files |
+| `ARCGIS_PRO_MCP_DB_USERNAME` / `ARCGIS_PRO_MCP_DB_PASSWORD` | Fixed credential variables for database connection creation; tools cannot choose other variable names |
+| `ARCGIS_PRO_MCP_INPUT_ROOTS` | Allowed input data roots |
+| `ARCGIS_PRO_MCP_PROJECT_ROOTS` | Allowed `.aprx` roots; falls back to input roots when unset |
+| `ARCGIS_PRO_MCP_EXPORT_ROOT` | Root for map, layout, report, chart, and audit exports |
+| `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` | Required output root for GP operations that write data |
+| `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP=1` + `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` | Both gates required for generic Python GP |
+| `ARCGIS_PRO_MCP_PORTAL_ALLOWLIST` / `ARCGIS_PRO_MCP_SERVER_ALLOWLIST` | Allowed publishing and enterprise targets |
+| `ARCGIS_PRO_MCP_SDK_GP_ALLOWLIST` / `ARCGIS_PRO_MCP_SDK_GP_ENV_ALLOWLIST` | SDK GP tool and environment allowlists |
+| `ARCGIS_PRO_MCP_SDK_ALLOW_EDIT_COMMANDS=1` | SDK Undo/Redo/save commands |
+| `ARCGIS_PRO_MCP_SDK_ALLOW_FEATURE_EDITS=1` | Native SDK feature create/update/delete operations |
+| `ARCGIS_PRO_MCP_SDK_ALLOW_DISCARD_EDITS=1` | SDK discard of all pending edits |
+| `ARCGIS_PRO_MCP_HOST_PORT` | Bind a Python `CURRENT` host to an explicit loopback port |
 
-此外：
+Additional rules:
 
-- 不要把密码、Portal token、窗口 bearer、租约 ID 或连接字符串提交到仓库、Issue、日志或截图。
-- 数据库连接优先使用 ArcGIS 管理的现有连接文件。创建新 `.sde` 时必须命中 `ARCGIS_PRO_MCP_DB_INSTANCE_ALLOWLIST`，只会读取固定的 `ARCGIS_PRO_MCP_DB_USERNAME` / `ARCGIS_PRO_MCP_DB_PASSWORD`；内联密码默认拒绝，凭据默认不保存到连接文件。
-- 写入型 GP 必须位于已配置的 GP 输出根下。通用 GP 还必须同时开启并精确 allowlist，每次提供至少一个完整 `out_*` 目标路径；输出容器与名称分离、原地/无输出、破坏性和代码执行工具均被拒绝。
-- 通用 GP 和 `CURRENT` 窗口分析拒绝已有输出，并在执行期强制 `overwriteOutput=False`。地图、布局、报表、图表、工程副本以及本地发布草稿/服务定义导出同样要求新文件；外部服务覆盖仍由独立发布覆盖门禁控制。
-- `arcgis_pro_gp_calculate_field` 只接受受限的纯 Arcade 表达式，不接受 Python/VB/code block 或远程动态取数；标注表达式也仅允许 Arcade，相关 CIM 标注写入还要求 CIM 门禁。`arcgis_pro_gp_repair_geometry` 固定使用 `KEEP_NULL`，不会借修复之名删除空几何记录。
-- 普通要素/行编辑由 `ARCGIS_PRO_MCP_ALLOW_WRITE` 授权；删除等操作再要求 destructive，SDK 原生要素编辑再要求 SDK feature gate。`ARCGIS_PRO_MCP_ALLOW_ENTERPRISE_WRITE` 只额外保护企业版本管理、维护和 Utility Network 管理操作。
-- 删除/覆盖类工具通常还要求 `expected_count`、目标路径或专用 `confirm_*` 参数。
-- 文件模式缓存的 `arcgis_pro_release_project` / `arcgis_pro_reload_project` 不会保存待处理更改；两者要求 WRITE + DESTRUCTIVE，并要求 `confirm_aprx_path` 与 `aprx_path` 完全一致。
-- 运行中超时不代表失败。先重新读取工程、选择或输出状态，再决定是否重试非幂等操作。
-- 不要把 Python 宿主或 SDK loopback 端口代理、端口转发或暴露到其他机器。
+- Do not put passwords, Portal tokens, host bearer tokens, lease IDs, or connection strings in the repository, issues, logs, or screenshots.
+- Prefer existing ArcGIS-managed database connection files. Creating a new `.sde` requires a match in `ARCGIS_PRO_MCP_DB_INSTANCE_ALLOWLIST` and reads only the fixed credential variables. Inline passwords are rejected and credentials are not saved by default.
+- GP writes must stay within configured output roots. Generic GP requires both enablement and an exact allowlist match, plus at least one complete `out_*` path per call. Split output container/name forms, in-place/no-output operations, destructive tools, and code execution are rejected.
+- Generic GP and `CURRENT` analysis reject existing outputs and enforce `overwriteOutput=False`. Map, layout, report, chart, project-copy, local publishing-draft, and service-definition exports also require new files. Remote service overwrite uses its separate publishing gate.
+- `arcgis_pro_gp_calculate_field` accepts restricted pure Arcade expressions, not Python/VB, code blocks, or remote data fetching. Label expressions also require Arcade; related CIM writes require the CIM gate. `arcgis_pro_gp_repair_geometry` always uses `KEEP_NULL` to preserve null-geometry records.
+- Ordinary feature/row edits require the general write gate. Deletion also requires the destructive gate; native SDK feature editing also requires the SDK feature gate. The enterprise gate adds protection only for enterprise version management, maintenance, and Utility Network administration.
+- Delete/overwrite tools usually require an `expected_count`, target path, or dedicated `confirm_*` parameter.
+- Project-file cache operations `arcgis_pro_release_project` and `arcgis_pro_reload_project` do not save pending changes. Both require WRITE + DESTRUCTIVE and an exact match between `confirm_aprx_path` and `aprx_path`.
+- A timeout does not establish that an operation failed. Re-read the project, selection, or outputs before retrying a non-idempotent action.
+- Do not proxy, forward, or expose the Python host or SDK loopback ports to other machines.
 
-完整策略见 [SECURITY.md](SECURITY.md) 和 [skill 安全矩阵](skills/arcgis-pro-mcp/references/security-and-paths.md)。
+See [SECURITY.md](SECURITY.md) and the [skill security matrix](skills/arcgis-pro-mcp/references/security-and-paths.md) for the full policy.
 
-## 故障排查
+## Troubleshooting
 
 ### `cannot import name 'FORWARDED_ENV_KEYS'`
 
-这通常不是缺少依赖，而是 ArcGIS Pro 进程仍缓存旧版 `arcgis_pro_mcp.pro_attach`，却开始加载新版 `pro_host`。2.0 的包外 bootstrap 会整代清除并重新载入 `arcgis_pro_mcp.*`，但升级已经加载的旧工具箱时仍需先退出旧宿主：
+This usually means Pro still has an older `arcgis_pro_mcp.pro_attach` module cached while loading a newer `pro_host`. The version 2.0 external bootstrap clears and reloads the complete `arcgis_pro_mcp.*` package generation. Stop the old host before reloading an upgraded toolbox:
 
-1. 取消正在运行的 `.pyt` 或在 Python 窗口按 Ctrl+C，等待输出“窗口宿主已停止”。
-2. 确保仓库代码是同一完整版本，不要只替换单个 `.py` 文件。
-3. 在 Catalog 刷新工具箱；如仍保留旧入口，移除后重新添加 `接入当前窗口.pyt`。
-4. 或先在 Python 窗口运行一次 `runpy.run_path(...)` 的 `.py` 入口。
-5. 再启动宿主并重启 MCP 客户端。只有旧类或中断标记仍被 Pro 持有时才需要重启 ArcGIS Pro。
+1. Cancel the running `.pyt` or press Ctrl+C in the Python window, then wait for the host-stopped message (“窗口宿主已停止”).
+2. Make sure the checkout contains one complete version, rather than a mixture of individual `.py` files.
+3. Refresh the toolbox in Catalog. If the old entry remains, remove and re-add `接入当前窗口.pyt`.
+4. Alternatively, run the `.py` entry once with `runpy.run_path(...)` in the Python window.
+5. Start the host again and restart the MCP client. Restart Pro only if it still retains stale classes or interruption state.
 
-不要在宿主仍运行时强制 `importlib.reload()`；它可能混用两代模块和工具注册。
+Do not force `importlib.reload()` while the host is running; this can mix module generations and tool registrations.
 
 ### `No module named 'mcp'`
 
-不要对 `ArcGISPro.exe` 使用 `-m pip`。按“接入当前窗口”一节的命令，用 ArcGIS Pro 环境内的 `python.exe` 将 `mcp>=1.20,<2` 安装到仓库本地 `.arcgis-pro-mcp-deps`，然后重新运行工具箱入口。启动器会自动发现该目录。
+Use the ArcGIS Pro environment's `python.exe`, not `ArcGISPro.exe -m pip`. Install `mcp>=1.20,<2` into the checkout-local `.arcgis-pro-mcp-deps` directory using the command in the attachment section, then run the attachment tool again. The launcher discovers that directory automatically.
 
-### `window_attached=false` 或 `target_confirmed=false`
+### `window_attached=false` or `target_confirmed=false`
 
-- 确认工程已保存、宿主仍在运行，且 stdio 与 Pro 使用匹配的宿主端口。
-- 每次宿主重启或切换工程后重新调用 `arcgis_pro_window_status()`。
-- 多个 Pro 实例应配置不同 `ARCGIS_PRO_MCP_HOST_PORT`；不要依赖“第一个窗口”。
+- Confirm that the project is saved, the host is running, and the stdio server and Pro use the same host port.
+- Call `arcgis_pro_window_status()` after every host restart or project switch.
+- Give each Pro instance a different `ARCGIS_PRO_MCP_HOST_PORT`; do not rely on the first window found.
 
-### SDK bridge 未发现或发现多个
+### SDK bridge missing or multiple bridges found
 
-- 确认 Add-In 已安装并在打开的 ArcGIS Pro 中加载。
-- 多实例时先读取脱敏状态，再给 `arcgis_pro_sdk_bridge_status(process_id=...)` 指定 PID。
-- discovery/lease 失效时重新获取状态和租约，不要复用旧 `sdk_session_ref`。
+- Verify that the Add-In is installed and loaded in the running Pro instance.
+- With multiple instances, inspect redacted status and pass a PID to `arcgis_pro_sdk_bridge_status(process_id=...)`.
+- Rediscover the bridge and acquire a new lease after discovery/lease expiry. Do not reuse an old `sdk_session_ref`.
 
-### 工具看得到但调用被拒绝
+### A tool is listed but its call is rejected
 
-调用 `arcgis_pro_tool_info(name="...")` 查看所需 gate、root、`CURRENT` 或 SDK 上下文。修改环境变量后重启 MCP 客户端；窗口宿主还要重新接入。
+Call `arcgis_pro_tool_info(name="...")` to inspect required gates, roots, `CURRENT` attachment, or SDK context. Restart the MCP client after environment changes and reattach the host.
 
-## 开发与验证
+## Development and validation
 
-普通 Python 可做语法、lint 和无 ArcPy 单元测试，但不能证明真实 ArcPy 行为：
+Standard Python can validate syntax, lint, and tests without ArcPy. It does not establish actual ArcPy behavior:
 
 ```powershell
 python -m pip install -e ".[dev]"
@@ -288,15 +292,17 @@ python -m py_compile arcgis_pro_mcp_bootstrap.py "接入当前窗口.py" "接入
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-真实变更还应使用目标 ArcGIS Pro Python 做 smoke test；SDK 改动需在 ArcGIS Pro SDK 3.6 工具链中构建并在 Pro 内验证。贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+Validate runtime changes with the target ArcGIS Pro Python environment. SDK changes also need a build using the ArcGIS Pro SDK 3.6 toolchain and validation inside Pro. Read [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.
 
-## 文档
+## Documentation
 
-- [实时窗口控制架构](docs/WINDOW_CONTROL.md)
-- [SDK Add-In 协议与构建](sdk/ArcGISProMcp.AddIn/README.md)
-- [安全策略](SECURITY.md)
-- [英文更新日志](CHANGELOG.md) / [中文更新日志](CHANGELOG.zh-CN.md)
-- [贡献指南](CONTRIBUTING.md)
+- [English guide](README.md) / [中文指南](README.zh-CN.md)
+- [Live-window control architecture (Chinese)](docs/WINDOW_CONTROL.md)
+- [SDK Add-In protocol and build instructions](sdk/ArcGISProMcp.AddIn/README.md)
+- [Security policy](SECURITY.md)
+- [English changelog](CHANGELOG.md) / [中文更新日志](CHANGELOG.zh-CN.md)
+- [Contribution guide](CONTRIBUTING.md)
+- [GIS reliability scope and limitations (Chinese)](docs/GIS_RELIABILITY.md)
 
 ## License
 
