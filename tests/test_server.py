@@ -633,6 +633,15 @@ class ServerToolTests(unittest.TestCase):
         self.assertIn("arcgis_pro_set_active_view_extent", payload["tools_require_allow_write"])
         self.assertIn("arcgis_pro_refresh_layer", payload["tools_require_window"])
 
+    def test_capabilities_follow_checker_version_and_required_checks(self) -> None:
+        with patch.object(server, "_window_status_fields", return_value={}), patch.object(
+            server.analysis_quality, "CHECKER_VERSION", "test-version"
+        ), patch.object(server.raster_checked, "_REQUIRED", {"new-check", "existing-check"}):
+            payload = json.loads(server.arcgis_pro_server_capabilities())
+        quality = payload["analysis_quality"]
+        self.assertEqual(quality["checker_version"], "test-version")
+        self.assertEqual(quality["required_checks"], ["existing-check", "new-check"])
+
     def test_open_map_view_can_focus_it_after_closing_views(self) -> None:
         target_map = SimpleNamespace(name="Target", openView=MagicMock())
         project = SimpleNamespace(closeViews=MagicMock())

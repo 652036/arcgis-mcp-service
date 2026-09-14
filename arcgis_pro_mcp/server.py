@@ -15,6 +15,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from arcgis_pro_mcp import (
+    analysis_quality,
     cartography,
     charts,
     da_read,
@@ -1214,10 +1215,10 @@ def arcgis_pro_server_capabilities() -> str:
             "project_roots_configured": bool(project_roots()),
             "generic_gp_enabled": gp_generic.generic_gp_enabled(),
             "analysis_quality": {
-                "checker_version": "1.0", "checked_operations": ["clip_raster"],
+                "checker_version": analysis_quality.CHECKER_VERSION, "checked_operations": ["clip_raster"],
                 "scope": "file-mode single-band north-up GeoTIFF; explicit rectangle or polygon file",
                 "asset_versions": "SHA256 dataset families", "runtime_mode": "FILE",
-                "required_checks": ["grid", "coverage", "outside_aoi", "values_preserved", "input_versions", "environment_restored"],
+                "required_checks": sorted(raster_checked._REQUIRED),
                 "unsupported": ["GUI selections", "multiband", "rotated grids", "implicit reprojection", "scientific model suitability"],
                 "legacy_tool_success_is_quality_qualification": False,
             },

@@ -33,6 +33,7 @@ from arcgis_pro_mcp.redaction import redact_sensitive, safe_error
 _LOCK = threading.RLock()
 _REQUIRED = {"grid", "coverage", "outside_aoi", "values_preserved", "input_versions", "environment_restored"}
 _ASSET_KEYS = {"asset_id", "path", "role", "identity_basis", "vector_layer", "fingerprint", "files", "metadata"}
+_ASSET_REQUIRED = {"asset_id", "path", "role", "identity_basis", "fingerprint"}
 
 
 def _backend():
@@ -250,6 +251,13 @@ def asset_info(dataset_path: str, role: str, identity_basis: str, vector_layer: 
 def _verify_asset(asset: dict[str, Any], roles: set[str]) -> dict[str, Any]:
     if not isinstance(asset, dict) or set(asset) - _ASSET_KEYS:
         raise RuntimeError("INVALID_ASSET_CONTRACT")
+    missing = _ASSET_REQUIRED - set(asset)
+    if missing:
+        raise RuntimeError(f"INVALID_ASSET_CONTRACT: missing required fields: {', '.join(sorted(missing))}")
+    if any(not isinstance(asset[key], str) or not asset[key].strip() for key in _ASSET_REQUIRED):
+        raise RuntimeError("INVALID_ASSET_CONTRACT: required fields must be nonempty strings")
+    if not isinstance(asset.get("vector_layer", ""), str):
+        raise RuntimeError("INVALID_ASSET_CONTRACT: vector_layer must be a string")
     if asset.get("role") not in roles:
         raise RuntimeError("ASSET_ROLE_MISMATCH")
     fresh = asset_info(asset["path"], asset["role"], asset["identity_basis"], asset.get("vector_layer", ""))
@@ -276,13 +284,19 @@ def _require_known_output_eligible(asset: dict[str, Any]) -> None:
             raise RuntimeError("INELIGIBLE_UPSTREAM_ASSET: known diagnostic output requires a new qualified run")
 
 
-def _run_dir(run_id: str) -> Path:
+def _validate_run_id(run_id: str) -> None:
+    if not isinstance(run_id, str):
+        raise RuntimeError("INVALID_RUN_ID: run_id must be a canonical lower-case UUID")
     try:
         parsed = str(uuid.UUID(run_id))
-    except (ValueError, AttributeError) as exc:
-        raise RuntimeError("run_id must be a UUID, known before submitting a write") from exc
+    except ValueError as exc:
+        raise RuntimeError("INVALID_RUN_ID: run_id must be a canonical lower-case UUID") from exc
     if parsed != run_id:
-        raise RuntimeError("run_id must be a canonical lower-case UUID")
+        raise RuntimeError("INVALID_RUN_ID: run_id must be a canonical lower-case UUID")
+
+
+def _run_dir(run_id: str) -> Path:
+    _validate_run_id(run_id)
     root = Path(require_gp_output_root_mandatory())
     return Path(
         validate_gp_output_path(
@@ -298,8 +312,7 @@ def _store(path: Path, report: dict[str, Any]) -> None:
 def result_status(run_id: str) -> dict[str, Any]:
     """Read authoritative evidence and invalidate it when an asset version changes."""
     # No directory creation on the read path.
-    if str(uuid.UUID(run_id)) != run_id:
-        raise RuntimeError("INVALID_RUN_ID")
+    _validate_run_id(run_id)
     root = Path(require_gp_output_root_mandatory())
     path = root / "_analysis_runs" / run_id / "report.json"
     if not path_under_root(str(path), str(root)):
@@ -307,7 +320,17 @@ def result_status(run_id: str) -> dict[str, Any]:
     report = private_state.read_private_json(path, max_bytes=1_048_576)
     if not report:
         raise RuntimeError("RUN_NOT_FOUND_OR_UNTRUSTED")
-    evidence = list(report.get("checks", []))
+    if not isinstance(report, dict) or report.get("run_id") != run_id:
+        raise RuntimeError("INVALID_RUN_REPORT: run_id does not match the requested run")
+    checks = report.get("checks", [])
+    if not isinstance(checks, list) or any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("name"), str)
+        or not isinstance(item.get("status"), str)
+        for item in checks
+    ):
+        raise RuntimeError("INVALID_RUN_REPORT: checks must contain named status records")
+    evidence = list(checks)
     status = report.get("execution_status", "UNKNOWN")
     if status == "RUNNING":
         # A synchronous request may have disconnected or its worker may have died.
@@ -320,7 +343,7 @@ def result_status(run_id: str) -> dict[str, Any]:
             for asset in report.get("assets", {}).values():
                 if _file_version(Path(asset["path"]))[0] != asset["fingerprint"]:
                     unchanged = False
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, KeyError, TypeError, AttributeError):
             unchanged = False
         evidence.append(qa.check("current_asset_versions", unchanged))
     elif status == "SUCCEEDED":
@@ -502,7 +525,7 @@ def run_clip_checked(
         raise RuntimeError("COVERAGE_POLICY_REQUIRED: [0,1], with a reason when missing data are allowed")
     if not isinstance(maximum_output_cells, int) or isinstance(maximum_output_cells, bool) or maximum_output_cells <= 0:
         raise RuntimeError("INVALID_RESOURCE_BUDGET")
-    validity = validity or {"value_space": "RAW"}
+    validity = {"value_space": "RAW"} if validity is None else validity
     if not isinstance(validity, dict) or set(validity) - {"value_space", "invalid_values", "minimum", "maximum"}:
         raise RuntimeError("INVALID_VALIDITY_POLICY")
     if validity.get("value_space") not in {"RAW", "PHYSICAL"}:
@@ -517,6 +540,8 @@ def run_clip_checked(
         raise RuntimeError("CONFLICTING_CLIP_GEOMETRY")
     if mode == "RECTANGLE" and (boundary_asset is not None or rectangle is None or not rectangle_crs):
         raise RuntimeError("RECTANGLE_AND_CRS_REQUIRED_WITHOUT_POLYGON")
+    if mode == "RECTANGLE":
+        qa.rectangle_values(rectangle)
     # Freeze the request before any analysis; a reused run_id never repeats the write.
     plan = {
         "source_asset": source_asset,
