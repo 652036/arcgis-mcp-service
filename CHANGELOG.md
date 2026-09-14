@@ -7,9 +7,17 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 ## [Unreleased]
 
 ### GIS reliability
-- Add file-mode checked clipping with versioned snapshots, explicit geometry, independent full-domain QA and immutable run IDs.
-- Fix RasterCalculator binding/save, add strict unmapped-value checks, explicit environment states, and existence-only verification labels. See [scope and limitations](docs/GIS_RELIABILITY.md).
+- Add `arcgis_pro_analysis_asset_info`, `arcgis_pro_gp_clip_raster_checked`, and `arcgis_pro_analysis_result_status` for file-mode clipping with versioned snapshots, explicit geometry, independent full-domain QA and immutable run IDs.
+- Reclassify adds `remap_mode=RANGE|VALUE` and `missing_values=DATA|NODATA|ERROR`. `ERROR` scans supported GeoTIFF inputs before execution and requires `reclass_field=Value` (case-insensitive); raster attribute fields are rejected because pixel values cannot validate their mappings.
+- Clip and ExtractByMask add scoped `environment` settings with `UNSET`, `CLEAR`, and `VALUE` states. ZonalStatisticsAsTable exposes `ignore_nodata=DATA|NODATA`.
+- Existence verification is explicitly labeled `EXISTENCE_ONLY` / `NOT_CHECKED` and does not qualify outputs for downstream analysis.
+- Validate canonical run UUIDs, required asset fields, validity policies, rectangle bounds and stored report structure before trusting them. Capability metadata reads the current checker version and required checks from the implementation.
+- Add ordinary CI tests for checked-raster contracts, version invalidation, run reuse, remap validation, clipping geometry and NoData policies. These tests require neither ArcPy nor GDAL; native integration tests remain opt-in. See [scope and limitations](docs/GIS_RELIABILITY.md).
 
+### Breaking changes
+- `arcgis_pro_gp_raster_calculator` now requires explicit `input_rasters` bindings for raster expressions. Migrate an expression such as `Raster("C:/allowed/input.tif") * 2` or a quoted layer name to `expression="x * 2"` with `input_rasters={"x": "C:/allowed/input.tif"}` (use an absolute path under your configured roots).
+- Expressions use the restricted calculator grammar; arbitrary Python, embedded filesystem reads and automatic path guessing are rejected. The wrapper calls `arcpy.ia.RasterCalculator(rasters, input_names, expression)` and saves its returned raster without retrying another signature.
+- Explicitly supplied empty or malformed checked-clip `validity` policies are rejected. Omit `validity` to use the default raw value space, or provide `{"value_space": "RAW"}` / `{"value_space": "PHYSICAL"}` with any declared limits.
 
 ### Changed
 - Ordinary project, map, and data writes are now enabled when

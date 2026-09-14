@@ -22,12 +22,14 @@
 
 - 栅格计算器按 `arcpy.ia.RasterCalculator(rasters, input_names, expression)` 调用并显式保存返回栅格；移除 TypeError 后猜测另一套参数的重试。
 - 计算器采用显式变量绑定与受限表达式。例如 expression=`x * 2 + 1`，input_rasters=`{"x":"<允许根内的绝对栅格路径>"}`。属性访问、索引、导入、任意函数和 Python 求值不可用。旧的引号图层名或 `Raster("path")` 表达式需要迁移到变量绑定；不静默猜测路径。
-- 重分类增加 RANGE / VALUE、DATA / NODATA / ERROR。ERROR 在执行前逐块检查有效输入是否全部有映射，适用于此版本支持的 GeoTIFF；共享端点遵循 ArcGIS 的较低区间包含上端点语义。检查有限数、整数输出类别和区间重叠。ERROR 是本包装器策略，不是原生 ArcPy 枚举。
+- 重分类增加 RANGE / VALUE、DATA / NODATA / ERROR。ERROR 在执行前逐块检查有效输入是否全部有映射，适用于此版本支持的 GeoTIFF，且要求 `reclass_field=Value`（不区分大小写）；其他栅格属性字段只能使用 DATA/NODATA，不能把像元值扫描当作属性字段映射检查。共享端点遵循 ArcGIS 的较低区间包含上端点语义。检查有限数、整数输出类别和区间重叠。ERROR 是本包装器策略，不是原生 ArcPy 枚举。
 - clip / extract 新增局部 environment 参数；UNSET 不修改、CLEAR 清空、VALUE 明确赋值。为兼容旧调用，原先的 null/空字符串仍表示不设置。
 - 分区统计显式暴露 DATA / NODATA 策略；尚未增加小分区有效样本数量诊断。
 - 既有存在性验证返回 `verification_scope=EXISTENCE_ONLY`、`qa_status=NOT_CHECKED` 和 `eligible_for_downstream=false`；无 Exists 能力时不再返回已验证。历史 verified 字段仅保留存在性含义。旧工具的 `ok=true` 仍仅表示工具执行，不是空间质量认证。
 
 ## 当前限制与后续阶段
+
+需要限制输入目录时，部署前应配置 `ARCGIS_PRO_MCP_INPUT_ROOTS`。共享路径策略在该变量未设置时允许任意绝对路径；checked 流程不会额外强制输入根。GP 输出根仍必须配置。运行 UUID 须为规范小写格式；缺少资产必填字段会返回明确的契约错误。`validity` 省略时默认 RAW，显式提供时必须声明 `value_space=RAW|PHYSICAL`，不能用空对象代替。
 
 严格适配器限本地、单波段、北向上的实数 GeoTIFF（整数不超过 32 位，避免复数或 64 位整数转浮点后失真），以及本地多边形 Shapefile / GeoPackage；GeoJSON 只有 GDAL 与 ArcPy 均可读取时才允许。多波段、旋转网格、GUI 当前选择、定义查询、自动重投影不在本轮完整流程内，拒绝处理。合法自定义 CRS 不以 WKID 是否为 0 判定；但输入与网格必须经过 CRS 等价检查。此轮没有实现投影变换选择或统一所有旧工具的网格契约。
 
@@ -41,6 +43,7 @@
 - 静态检查：`python -m compileall -q arcgis_pro_mcp`、`ruff check .`。
 - 原生验证：在 ArcGIS Pro Python 中设 `ARCGIS_MCP_RUN_NATIVE_QA=1`，运行 `tests/test_raster_checked_native.py`。测试只创建临时合成文件；可用 `ARCGIS_MCP_NATIVE_QA_REPORT` 指定私有结果文件。GDAL 与 NumPy 必须存在；不修改共享 Pro 环境。
 - `tests/test_analysis_quality.py` 检查缺失门禁、WARNING/NOT_APPLICABLE、环境三态、整数/半像元平移，以及计算器调用与不重试。
+- `tests/test_raster_checked.py` 在无 ArcPy/GDAL 的 CI 中检查 UUID、几何和有效值参数、资产契约、完整预期网格、运行复用、报告结构与版本变化后的资格失效；`tests/test_gp_raster.py` 使用 mock 检查重分类映射和字段限制、裁剪范围、局部环境恢复以及分区统计 NoData 参数。MCP 2.x 环境的兼容依赖用法见 [开发说明](../AGENTS.md#development)。
 - 原生用例覆盖 L 形 75、孔洞 84、分离多边形 8、矩形 100、条带缺失 90/100、缩短源文件 50/100、全 NoData、空像元中心域、半像元错位、继承环境清理与恢复、输入变更失效、改名诊断结果拦截，以及真实重分类和栅格代数。
 
 这些是对应 T01/T02/T03/T04/T06/T07/T08/T10/T11/T12/T13/T15/T16/T17/T22/T33/T34/T35/T39/T47 的相关子情景；只有测试中的具体情景得到验证，不将整项所有条件或其他用例算作通过。后续复杂用例见用户提供的完整包。
@@ -54,3 +57,7 @@
 ## 本机验收结果（2026-09-09）
 
 301 项普通测试断言通过，6 项真实 ArcPy 集成测试和 2 项 GDAL 元数据测试通过；ruff、compileall 和独立 stdio MCP 新工具目录检查通过。ArcGIS Pro 3.6。完整的分场景数值见 [验证记录](GIS_RELIABILITY_VALIDATION.json)。测试中 ArcGIS 报告了代码页 936 警告，但数值断言通过。极小、没有像元中心的范围由原生 Clip 拒绝，验证的是不能获得资格，不将其算作独立 QA 成功完成。
+
+## 审查修复复核（2026-09-14）
+
+新增 30 项无需 ArcPy/GDAL 的测试。普通完整测试发现 339 项，其中 331 项通过、8 项原生测试默认跳过；随后在 ArcGIS Pro 3.6 Python 中单独运行这 8 项，全部通过。compileall、Ruff 和 Git 空白检查通过。原生测试仍只使用临时合成数据，覆盖既有裁剪、重分类和计算器场景；本次未重接 CURRENT，也未证明已有 MCP 进程已加载更新。上方 JSON 保留为 2026-09-09 的历史记录。

@@ -21,6 +21,20 @@
 - Path and write policy lives in `arcgis_pro_mcp/paths.py`; keep policies centralized.
 - Run `python -m compileall arcgis_pro_mcp` and `python -m unittest discover -s tests -p "test_*.py"` before pushing.
 - Run `ruff check .` when the dev dependency is available.
+- Tests require `mcp>=1.20,<2`. If system Python has MCP 2.x, use the checkout-local dependencies in a scoped PowerShell session (do not modify the global installation):
+
+```powershell
+$previousPythonPath = $env:PYTHONPATH
+try {
+    $env:PYTHONPATH = (Resolve-Path .arcgis-pro-mcp-deps).Path
+    python -c "from mcp.server.fastmcp import FastMCP"
+    python -m unittest discover -s tests -p "test_*.py"
+} finally {
+    $env:PYTHONPATH = $previousPythonPath
+}
+```
+
+If that directory is absent, install the project's declared dependencies in a dedicated virtual environment first. The ordinary suite skips native QA; passing it does not prove ArcPy/GDAL execution.
 
 ## Skill
 

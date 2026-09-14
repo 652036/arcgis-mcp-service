@@ -58,6 +58,21 @@ python -m unittest discover -s tests -p "test_*.py"
 
 The project intentionally requires `mcp>=1.20,<2`; registration tests must use a compatible version.
 
+If system Python has MCP 2.x and this checkout already has `.arcgis-pro-mcp-deps`, scope the compatible dependencies to the test command and restore the previous shell setting:
+
+```powershell
+$previousPythonPath = $env:PYTHONPATH
+try {
+    $env:PYTHONPATH = (Resolve-Path .arcgis-pro-mcp-deps).Path
+    python -c "from mcp.server.fastmcp import FastMCP"
+    python -m unittest discover -s tests -p "test_*.py"
+} finally {
+    $env:PYTHONPATH = $previousPythonPath
+}
+```
+
+If the directory does not exist, use a dedicated virtual environment with the declared project dependencies. Do not silently alter imports in `tests/__init__.py` or replace the global MCP installation to make tests pass.
+
 On a Windows workstation with ArcGIS Pro, run the relevant unit modules through Pro Python and verify real ArcPy availability:
 
 ```powershell

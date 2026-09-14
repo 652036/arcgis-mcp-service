@@ -178,4 +178,4 @@ No tool authorizes arbitrary Python/.NET execution, arbitrary Ribbon/dialog clic
 
 ## Checked raster clipping
 
-New file-mode tools: `arcgis_pro_analysis_asset_info`, `arcgis_pro_gp_clip_raster_checked`, and `arcgis_pro_analysis_result_status`. See [analysis-validation.md](analysis-validation.md) for roles, supported formats, run IDs and quality gates. Legacy calculator requires explicit raster bindings; reclassify supports missing_values=ERROR and remap_mode=VALUE.
+New file-mode tools: `arcgis_pro_analysis_asset_info`, `arcgis_pro_gp_clip_raster_checked`, and `arcgis_pro_analysis_result_status`. See [analysis-validation.md](analysis-validation.md) for roles, supported formats, run IDs and quality gates. Legacy calculator requires explicit raster bindings; reclassify supports missing_values=ERROR (Value field only) and remap_mode=VALUE.

@@ -7,9 +7,17 @@
 ## [Unreleased]
 
 ### GIS 可靠性
-- 新增文件模式裁剪质量流程：固定输入版本、明确范围、完整像元覆盖检查和结果资格。
-- 修复栅格计算器签名/保存，增加漏配检查、环境三态和存在性验证标识。详见[实现与限制](docs/GIS_RELIABILITY.md)。
+- 新增 `arcgis_pro_analysis_asset_info`、`arcgis_pro_gp_clip_raster_checked` 和 `arcgis_pro_analysis_result_status`：文件模式裁剪、固定输入版本、明确范围、完整像元覆盖检查和不可重复执行的运行 UUID。
+- 重分类新增 `remap_mode=RANGE|VALUE` 和 `missing_values=DATA|NODATA|ERROR`。`ERROR` 在执行前扫描支持的 GeoTIFF，且要求 `reclass_field=Value`（不区分大小写）；不能用像元值验证栅格属性字段映射，因此拒绝这类字段。
+- Clip 和 ExtractByMask 新增局部 `environment` 参数，支持 `UNSET`、`CLEAR`、`VALUE`；ZonalStatisticsAsTable 显式提供 `ignore_nodata=DATA|NODATA`。
+- 存在性验证显式标记为 `EXISTENCE_ONLY` / `NOT_CHECKED`，不授予结果进入下游分析的资格。
+- 校验规范 UUID、资产必填字段、有效值策略、矩形范围和已存报告结构；能力声明直接读取实现中的检查器版本与必需检查项。
+- 为 checked 契约、版本失效、UUID 复用、重分类映射、裁剪范围和 NoData 策略增加普通 CI 测试，无需 ArcPy 或 GDAL；原生集成测试仍需显式开启。详见[实现与限制](docs/GIS_RELIABILITY.md)。
 
+### 破坏性变更
+- `arcgis_pro_gp_raster_calculator` 的栅格表达式现在必须提供 `input_rasters` 变量绑定。将 `Raster("C:/allowed/input.tif") * 2` 或带引号的图层名表达式迁移为 `expression="x * 2"`、`input_rasters={"x": "C:/allowed/input.tif"}`，路径应替换为已配置允许根内的绝对路径。
+- 表达式采用受限语法，拒绝任意 Python、内嵌文件读取和自动猜测路径。包装器调用 `arcpy.ia.RasterCalculator(rasters, input_names, expression)` 并显式保存返回的栅格，不再重试另一套签名。
+- checked 裁剪不再把显式传入的空或格式错误的 `validity` 当成默认值。省略该参数可使用原始值空间；也可明确提供 `{"value_space": "RAW"}` 或 `{"value_space": "PHYSICAL"}` 及所需阈值。
 
 ### 变更
 - 未设置 `ARCGIS_PRO_MCP_ALLOW_WRITE` 时，普通工程、地图和数据写入现在默认启用；
