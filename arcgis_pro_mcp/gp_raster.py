@@ -111,6 +111,8 @@ def run_reclassify(
     if mv not in {"DATA", "NODATA", "ERROR"}:
         raise RuntimeError("missing_values must be DATA, NODATA or ERROR")
     if mv == "ERROR":
+        if rf.casefold() != "value":
+            raise RuntimeError("ERROR_RECLASS_FIELD_UNSUPPORTED: missing_values=ERROR requires reclass_field=Value")
         # Full input scan before ArcPy: output class checks alone cannot find
         # unclassified values that accidentally equal an allowed output class.
         from arcgis_pro_mcp.raster_checked import _backend, _raster
