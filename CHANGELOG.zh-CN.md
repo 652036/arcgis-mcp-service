@@ -26,6 +26,9 @@
   SDK 编辑门禁仍默认关闭。
 
 ### 修复
+- 原生 GP 分发在缺少 ArcPy 顶层别名时，改用 `arcpy.gp` 调用已注册的 Spatial/Image Analyst 工具，按原生参数顺序传递并保留可选参数空位；执行前拒绝未知参数名。
+- 通用 GP 按原生参数方向元数据校验路径并识别输出，支持 `clip_features`、`erase_features`、`target_features`、`near_features` 等输入名称，仍执行已配置的路径根限制。
+- 原生 RasterCalculator 的原始代码表达式不通过通用入口开放；继续使用带显式栅格绑定和表达式校验的专用计算器。
 - ArcGIS Pro 工具箱启动器现在会自动发现仓库本地 `.arcgis-pro-mcp-deps` 中的
   FastMCP，并在依赖缺失时给出有效的 `python.exe -m pip --target` 修复命令，
   不再错误建议使用 `ArcGISPro.exe -m pip`。

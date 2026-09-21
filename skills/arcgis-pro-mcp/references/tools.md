@@ -100,9 +100,11 @@ Verify the required extension, every input, the GP output root, output nonexiste
 
 ## Spatial Analysis And Modeling
 
-Named vector/table GP covers overlay, proximity, dissolve/merge, spatial join, statistics/frequency, conversion, field calculation, geometry repair/checking, sampling and tessellation. Prefer these wrappers over generic GP.
+Vector/table GP covers overlay, proximity, dissolve/merge, spatial join, statistics/frequency, conversion, field calculation, geometry repair/checking, sampling and tessellation. Prefer native generic GP when its new-output contract applies; use dedicated wrappers when extra semantics or in-place operations require them.
 
 Prefer the standalone generic runner for supported native file-based GP. It is enabled by default with no deployment tool allowlist; pass a registered native tool name (`analysis.Buffer` or `Buffer_analysis`) and native keyword parameters. It is creation-only: WRITE, a configured GP output root, and at least one complete `out_*` path are required. It rejects workspace/name output pairs, existing targets, no-output/in-place operations, destructive tools, and code-execution tools, and enforces `overwriteOutput=False`. Set `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP=0` to disable it. The `CURRENT` map-analysis entry has the same complete-new-output/root rule plus a closed tool list; it cannot be used to run Calculate Field, Calculate Geometry Attributes, or Repair Geometry. Use dedicated wrappers for these operations and for checked quality workflows or project/window context.
+
+The generic adapter reads ArcPy's parameter direction metadata to validate inputs and discover outputs, including names such as `clip_features` and `target_features`. Spatial/Image Analyst tools without a top-level ArcPy alias use the registered `arcpy.gp` positional contract, preserving optional parameter gaps; arbitrary Python attributes are not executable GP tools.
 
 Spatial statistics and models include hot spots, cluster/outlier, Global Moran, nearest neighbor, Ripley's K, center/directional distribution, OLS/GWR/forest models, plus:
 

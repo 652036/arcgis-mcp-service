@@ -30,6 +30,7 @@ _HARD_DENIED_OPERATION_PREFIXES = (
     "calculatevalue",
     "delete",
     "execute",
+    "rastercalculator",
     "run",
     "truncate",
 )
@@ -108,7 +109,7 @@ def _ensure_generic_tool_allowed(tool_name: str) -> None:
     _ensure_tool_is_not_hard_denied(tool_name)
 
 
-def _resolve_registered_tool(arcpy: Any, tool_name: str) -> Any:
+def _resolve_registered_tool(arcpy: Any, tool_name: str) -> tuple[Any, list[Any]]:
     """Resolve a GP catalog entry, never an arbitrary attribute of arcpy."""
     parts = tool_name.split(".")
     if len(parts) == 2:
@@ -123,10 +124,25 @@ def _resolve_registered_tool(arcpy: Any, tool_name: str) -> Any:
     registered = next((name for name in list_tools() or [] if name.casefold() == candidate.casefold()), None)
     if registered is None:
         raise RuntimeError(f"未找到已注册的原生 GP 工具: {tool_name}")
+    describe_parameters = getattr(arcpy, "GetParameterInfo", None)
+    if not callable(describe_parameters):
+        raise RuntimeError("当前 ArcPy 缺少 GetParameterInfo，无法确认原生 GP 参数")
+    parameters = [p for p in describe_parameters(registered) if p.parameterType != "Derived"]
     func = getattr(arcpy, registered, None)
-    if not callable(func):
+    if callable(func):
+        return func, parameters
+    # Spatial/Image Analyst GP entries often have no top-level Python alias.
+    # arcpy.gp exposes their native positional contract, including output paths;
+    # arcpy.sa/ia functions instead return Raster objects and have other signatures.
+    native = getattr(getattr(arcpy, "gp", None), registered, None)
+    if not callable(native):
         raise RuntimeError(f"已注册的 GP 工具不可调用: {registered}")
-    return func
+
+    def invoke_native(**values: Any) -> Any:
+        last = max((i for i, p in enumerate(parameters) if p.name in values), default=-1)
+        return native(*(values.get(p.name, "#") for p in parameters[:last + 1]))
+
+    return invoke_native, parameters
 
 
 def _path_mode_for_key(key: str | None) -> str | None:
@@ -151,14 +167,15 @@ def _path_mode_for_key(key: str | None) -> str | None:
     return None
 
 
-def _sanitize_parameter_value(key: str | None, value: Any) -> Any:
-    mode = _path_mode_for_key(key)
+def _sanitize_parameter_value(key: str | None, value: Any, native_mode: str | None = None) -> Any:
+    inferred = _path_mode_for_key(key)
+    mode = "secret" if inferred == "secret" else native_mode or inferred
     if isinstance(value, dict):
-        return {k: _sanitize_parameter_value(str(k), v) for k, v in value.items()}
+        return {k: _sanitize_parameter_value(str(k), v, native_mode) for k, v in value.items()}
     if isinstance(value, list):
-        return [_sanitize_parameter_value(key, item) for item in value]
+        return [_sanitize_parameter_value(key, item, native_mode) for item in value]
     if isinstance(value, tuple):
-        return tuple(_sanitize_parameter_value(key, item) for item in value)
+        return tuple(_sanitize_parameter_value(key, item, native_mode) for item in value)
     if isinstance(value, str):
         s = value.strip()
         if session_refs.is_reference(s):
@@ -185,7 +202,7 @@ def _sanitize_parameter_value(key: str | None, value: Any) -> Any:
     return value
 
 
-def _controlled_output_targets(parameters: dict[str, Any]) -> list[str]:
+def _controlled_output_targets(parameters: dict[str, Any], output_names: set[str]) -> list[str]:
     """Return exact durable outputs and reject ambiguous container/name outputs."""
 
     container_keys = {
@@ -205,8 +222,7 @@ def _controlled_output_targets(parameters: dict[str, Any]) -> list[str]:
         )
     outputs: list[str] = []
     for key, value in parameters.items():
-        name = str(key).strip().lower()
-        if _path_mode_for_key(name) != "output":
+        if key not in output_names:
             continue
         candidates = value if isinstance(value, (list, tuple)) else [value]
         for item in candidates:
@@ -246,13 +262,20 @@ def run_tool(
     if not _TOOL_RE.match(tn):
         raise RuntimeError("tool_name 格式不合法（如 analysis.Buffer 或 management.Clip）")
     _ensure_generic_tool_allowed(tn)
-    func = _resolve_registered_tool(arcpy, tn)
+    func, native_parameters = _resolve_registered_tool(arcpy, tn)
     require_gp_output_root_mandatory()
     supplied_parameters = parameters or {}
     if not isinstance(supplied_parameters, dict):
         raise RuntimeError("parameters 必须为对象")
-    params = _sanitize_parameter_value(None, supplied_parameters)
-    targets = _controlled_output_targets(params)
+    by_name = {p.name: p for p in native_parameters}
+    unknown = set(supplied_parameters) - set(by_name)
+    if unknown:
+        raise RuntimeError(f"原生 GP 参数无效 ({tn}): {', '.join(sorted(unknown))}")
+    params = {
+        key: _sanitize_parameter_value(key, value, by_name[key].direction.lower())
+        for key, value in supplied_parameters.items()
+    }
+    targets = _controlled_output_targets(params, {p.name for p in native_parameters if p.direction == "Output"})
     if not targets:
         raise RuntimeError(
             "通用 GP 只允许创建受 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT 约束的持久输出；"

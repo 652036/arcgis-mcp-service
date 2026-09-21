@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from arcgis_pro_mcp import gp_generic
@@ -45,6 +46,12 @@ class _FakeArcpy:
 
     def ListTools(self) -> list[str]:
         return ["CopyFeatures_management", "Buffer_analysis", "BuildPyramids_management"]
+
+    def GetParameterInfo(self, name: str) -> list[SimpleNamespace]:
+        inputs = ["in_features", "in_raster_dataset", "out_path", "out_name", "password"]
+        return [SimpleNamespace(name=key, parameterType="Optional", direction="Input") for key in inputs] + [
+            SimpleNamespace(name="out_feature_class", parameterType="Required", direction="Output")
+        ]
 
     def Exists(self, path: str) -> bool:
         return path in self.existing
@@ -115,6 +122,63 @@ class GenericGPTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "ARCGIS_PRO_MCP_ALLOW_WRITE"):
                 gp_generic.run_tool(arcpy, "management.CopyFeatures", {})
         self.assertEqual(arcpy.management.calls, [])
+
+    def test_native_gp_fallback_preserves_parameter_order_and_optional_gaps(self) -> None:
+        arcpy = _FakeArcpy()
+        native = MagicMock(return_value=_FakeResult())
+        arcpy.gp = SimpleNamespace(Abs_sa=native)
+        arcpy.ListTools = lambda: ["Abs_sa"]
+        arcpy.GetParameterInfo = MagicMock(return_value=[
+            SimpleNamespace(name=name, parameterType=kind, direction="Output" if name == "out_raster" else "Input") for name, kind in (
+                ("in_raster", "Required"), ("out_raster", "Required"),
+                ("mode", "Optional"), ("scale", "Optional"), ("derived_result", "Derived"),
+            )
+        ])
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ, {"ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root}, clear=True
+        ):
+            output = os.path.normpath(str(Path(root) / "abs.tif"))
+            gp_generic.run_tool(arcpy, "sa.Abs", {"scale": 2, "out_raster": output, "in_raster": 3})
+        native.assert_called_once_with(3, output, "#", 2)
+        arcpy.GetParameterInfo.assert_called_once_with("Abs_sa")
+
+    def test_native_gp_fallback_rejects_unknown_or_derived_parameters(self) -> None:
+        arcpy = _FakeArcpy()
+        native = MagicMock()
+        arcpy.gp = SimpleNamespace(Abs_sa=native)
+        arcpy.ListTools = lambda: ["Abs_sa"]
+        arcpy.GetParameterInfo = MagicMock(return_value=[
+            SimpleNamespace(name="out_raster", parameterType="Required", direction="Output"),
+            SimpleNamespace(name="derived_result", parameterType="Derived", direction="Output"),
+        ])
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ, {"ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root}, clear=True
+        ):
+            for invalid in ("typo", "derived_result"):
+                with self.subTest(invalid=invalid), self.assertRaisesRegex(RuntimeError, "原生 GP 参数无效"):
+                    gp_generic.run_tool(arcpy, "Abs_sa", {"out_raster": str(Path(root) / "abs.tif"), invalid: 1})
+        native.assert_not_called()
+
+    def test_native_metadata_identifies_nonstandard_input_and_output_names(self) -> None:
+        arcpy = _FakeArcpy()
+        native = MagicMock(return_value=_FakeResult())
+        arcpy.Clip_analysis = native
+        arcpy.ListTools = lambda: ["Clip_analysis"]
+        arcpy.GetParameterInfo = lambda name: [
+            SimpleNamespace(name=key, parameterType="Required", direction=direction)
+            for key, direction in (("clip_features", "Input"), ("target_features", "Input"), ("result", "Output"))
+        ]
+        with tempfile.TemporaryDirectory() as source_root, tempfile.TemporaryDirectory() as output_root, patch.dict(
+            os.environ, {"ARCGIS_PRO_MCP_INPUT_ROOTS": source_root, "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root}, clear=True
+        ):
+            source = os.path.normpath(str(Path(source_root) / "source.shp"))
+            output = os.path.normpath(str(Path(output_root) / "result.shp"))
+            gp_generic.run_tool(arcpy, "analysis.Clip", {"clip_features": source, "target_features": [source], "result": output})
+            native.assert_called_once_with(clip_features=source, target_features=[source], result=output)
+            native.reset_mock()
+            with self.assertRaises(RuntimeError):
+                gp_generic.run_tool(arcpy, "analysis.Clip", {"clip_features": output, "result": output})
+            native.assert_not_called()
 
     def test_generic_gp_validates_paths_for_native_tool(self) -> None:
         arcpy = _FakeArcpy()
@@ -199,6 +263,8 @@ class GenericGPTests(unittest.TestCase):
             "management.TruncateTable",
             "management.CalculateField",
             "CalculateValue_management",
+            "RasterCalculator_sa",
+            "ia.RasterCalculator",
             "custom.RunScript",
         ]
         with patch.dict(

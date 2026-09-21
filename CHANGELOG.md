@@ -27,6 +27,9 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
   edit gates remain disabled by default.
 
 ### Fixed
+- Native GP dispatch now resolves registered Spatial/Image Analyst tools through `arcpy.gp` when a top-level ArcPy alias is absent, using native parameter order and preserving optional gaps. Unknown keyword parameters are rejected before execution.
+- Generic GP now uses native parameter direction metadata for path validation and output discovery, allowing inputs such as `clip_features`, `erase_features`, `target_features`, and `near_features` without weakening configured roots.
+- Raw native RasterCalculator remains outside generic GP's code-execution boundary; use the dedicated calculator with explicit raster bindings and validated expressions.
 - The ArcGIS Pro toolbox bootstrap now discovers a checkout-local
   `.arcgis-pro-mcp-deps` FastMCP installation and reports a valid
   `python.exe -m pip --target` recovery command instead of the invalid
