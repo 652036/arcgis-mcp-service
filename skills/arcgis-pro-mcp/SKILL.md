@@ -5,7 +5,7 @@ description: Operate ArcGIS Pro and ArcPy through this repository's constrained 
 
 # ArcGIS Pro MCP
 
-Use the smallest supported semantic tool and preserve the user's chosen target. The server exposes structured tool schemas and policy metadata; do not infer a capability or safety gate from a remembered tool list.
+Prefer native GP execution through `arcgis_pro_gp_run_tool` for supported file-based geoprocessing, preserving native parameter names and the user's chosen target. Use dedicated tools for project/window context, checked quality workflows, and operations outside the generic new-output contract. The server exposes structured tool schemas and policy metadata; do not infer a capability or safety gate from a remembered tool list.
 
 ## Choose One Execution Mode
 
@@ -30,7 +30,7 @@ Read [references/runtime-notes.md](references/runtime-notes.md) before controlli
 - Even though the server's ordinary write gate is enabled by default, default agent behavior remains read-only. A user's request to inspect or diagnose does not authorize edits, exports, publication, or saves. Set `ARCGIS_PRO_MCP_ALLOW_WRITE=0` for a read-only deployment.
 - Respect every gate reported by `arcgis_pro_tool_info`, including conditional gates. Ordinary writes, destructive/schema operations, raw CIM, enterprise writes, publication, public sharing, overwrite publication, SDK edits, and SDK feature edits have distinct controls.
 - Keep project/input paths inside configured roots. Keep exports and GP outputs inside their respective roots. Never broaden a root to a drive or user profile merely to make a call pass.
-- Prefer named/typed wrappers. Generic GP requires base write permission, explicit enablement, an exact allowlist, a configured GP output root, and a complete new output path. It rejects container/name pairs, existing targets, in-place/no-output work, destructive tools, and code execution, and forces overwrite off. The SDK GP bridge additionally requires a built-in typed contract and its own allowlists.
+- Generic GP is enabled by default and needs no deployment tool allowlist. Prefer it for supported native GP operations; discover the registered tool name and use native keyword parameters. It still requires base write permission, a configured GP output root, and a complete new output path. It rejects container/name pairs, existing targets, in-place/no-output work, destructive tools, and code execution, and forces overwrite off. Explicit `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP=0` disables it. The SDK GP bridge separately requires a built-in typed contract and its own allowlists.
 - Treat deletions, truncation, schema removal, overwrite, discard-all, broad selection edits, and similarly irreversible work as destructive. Require the tool's exact target/count/digest confirmation in addition to its environment gate.
 - Treat enterprise permission narrowly: `ARCGIS_PRO_MCP_ALLOW_ENTERPRISE_WRITE` covers version management, maintenance, and Utility Network administration. Ordinary feature/row edits use WRITE, plus destructive permission for deletion and the SDK-feature gate for native SDK feature edits.
 - Use only the constrained Arcade subset for Calculate Field and only Arcade for label expressions; never supply Python/VB/code blocks or remote dynamic evaluation. Repair Geometry is fixed to `KEEP_NULL`. Export and local publishing-artifact paths must be new rather than silently replacing existing files.

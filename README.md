@@ -52,7 +52,7 @@ The runtime tool catalog identifies read/write behavior, required path roots, li
 - Publishing: sharing drafts, service-definition staging, and publishing with separate gates for Portal/Server targets, public sharing, and service overwrites.
 - Live control: Python `CURRENT` views and selections; SDK active context, events, camera, time, native edits, and cancellable allowlisted GP jobs.
 
-This project does not provide arbitrary Python, CIM, or geoprocessing execution, or general desktop mouse automation. Generic GP is disabled by default. The SDK accepts only the typed contracts implemented in the code.
+Native GP is available through the default-enabled generic entry point, without a deployment tool allowlist, subject to its write and output rules. The project does not expose arbitrary Python execution or general desktop mouse automation. The SDK accepts only the typed contracts implemented in the code.
 
 ## Requirements
 
@@ -102,7 +102,7 @@ The following is a generic `mcpServers` example. Replace the interpreter, reposi
         "ARCGIS_PRO_MCP_EXPORT_ROOT": "C:\\GIS_Outputs",
         "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": "C:\\GIS_Outputs\\GP",
         "ARCGIS_PRO_MCP_DB_INSTANCE_ALLOWLIST": "SQL_SERVER|db.example.internal",
-        "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "0"
+        "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "1"
       }
     }
   }
@@ -223,7 +223,7 @@ Ordinary reads and writes are enabled by default. Set `ARCGIS_PRO_MCP_ALLOW_WRIT
 | `ARCGIS_PRO_MCP_PROJECT_ROOTS` | Allowed `.aprx` roots; falls back to input roots when unset |
 | `ARCGIS_PRO_MCP_EXPORT_ROOT` | Root for map, layout, report, chart, and audit exports |
 | `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` | Required output root for GP operations that write data |
-| `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP=1` + `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` | Both gates required for generic Python GP |
+| `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP` | Generic Python GP defaults to enabled; set `0` to disable. No tool allowlist is required. |
 | `ARCGIS_PRO_MCP_PORTAL_ALLOWLIST` / `ARCGIS_PRO_MCP_SERVER_ALLOWLIST` | Allowed publishing and enterprise targets |
 | `ARCGIS_PRO_MCP_SDK_GP_ALLOWLIST` / `ARCGIS_PRO_MCP_SDK_GP_ENV_ALLOWLIST` | SDK GP tool and environment allowlists |
 | `ARCGIS_PRO_MCP_SDK_ALLOW_EDIT_COMMANDS=1` | SDK Undo/Redo/save commands |
@@ -235,7 +235,7 @@ Additional rules:
 
 - Do not put passwords, Portal tokens, host bearer tokens, lease IDs, or connection strings in the repository, issues, logs, or screenshots.
 - Prefer existing ArcGIS-managed database connection files. Creating a new `.sde` requires a match in `ARCGIS_PRO_MCP_DB_INSTANCE_ALLOWLIST` and reads only the fixed credential variables. Inline passwords are rejected and credentials are not saved by default.
-- GP writes must stay within configured output roots. Generic GP requires both enablement and an exact allowlist match, plus at least one complete `out_*` path per call. Split output container/name forms, in-place/no-output operations, destructive tools, and code execution are rejected.
+- Prefer `arcgis_pro_gp_run_tool` for supported native file-based GP, supplying the native tool name and keyword parameters. Generic GP is enabled by default and has no deployment tool allowlist; the old `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` setting is ignored. Both `analysis.Buffer` and `Buffer_analysis` resolve through ArcPy's registered GP catalog. GP writes must stay within configured output roots and provide at least one complete `out_*` path per call. Split output container/name forms, in-place/no-output operations, destructive tools, and code execution are rejected. Use dedicated wrappers for checked quality workflows, project/window context, or operations outside this contract.
 - Generic GP and `CURRENT` analysis reject existing outputs and enforce `overwriteOutput=False`. Map, layout, report, chart, project-copy, local publishing-draft, and service-definition exports also require new files. Remote service overwrite uses its separate publishing gate.
 - `arcgis_pro_gp_calculate_field` accepts restricted pure Arcade expressions, not Python/VB, code blocks, or remote data fetching. Label expressions also require Arcade; related CIM writes require the CIM gate. `arcgis_pro_gp_repair_geometry` always uses `KEEP_NULL` to preserve null-geometry records.
 - Ordinary feature/row edits require the general write gate. Deletion also requires the destructive gate; native SDK feature editing also requires the SDK feature gate. The enterprise gate adds protection only for enterprise version management, maintenance, and Utility Network administration.

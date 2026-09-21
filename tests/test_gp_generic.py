@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from arcgis_pro_mcp import gp_generic
 
@@ -37,8 +37,14 @@ class _FakeManagement:
 class _FakeArcpy:
     def __init__(self) -> None:
         self.management = _FakeManagement()
+        self.CopyFeatures_management = self.management.CopyFeatures
+        self.Buffer_analysis = self.management.Buffer
+        self.BuildPyramids_management = self.management.BuildPyramids
         self.env_calls: list[dict[str, object]] = []
         self.existing: set[str] = set()
+
+    def ListTools(self) -> list[str]:
+        return ["CopyFeatures_management", "Buffer_analysis", "BuildPyramids_management"]
 
     def Exists(self, path: str) -> bool:
         return path in self.existing
@@ -50,30 +56,67 @@ class _FakeArcpy:
 
 
 class GenericGPTests(unittest.TestCase):
-    def test_generic_gp_is_disabled_by_default(self) -> None:
+    def test_generic_gp_can_be_explicitly_disabled(self) -> None:
         arcpy = _FakeArcpy()
-        with patch.dict(
-            os.environ,
-            {"ARCGIS_PRO_MCP_ALLOW_WRITE": "1"},
-            clear=True,
-        ):
-            with self.assertRaisesRegex(RuntimeError, "通用 GP 已禁用"):
-                gp_generic.run_tool(arcpy, "management.CopyFeatures", {})
+        for value in ("0", "false", "NO", "off", "", "invalid"):
+            with self.subTest(value=value), patch.dict(
+                os.environ, {"ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": value}, clear=True
+            ):
+                with self.assertRaisesRegex(RuntimeError, "通用 GP 已禁用"):
+                    gp_generic.run_tool(arcpy, "management.CopyFeatures", {})
+        self.assertEqual(arcpy.management.calls, [])
 
-    def test_generic_gp_requires_allowlist(self) -> None:
+    def test_generic_gp_is_enabled_by_default_without_allowlist(self) -> None:
         arcpy = _FakeArcpy()
-        with patch.dict(
-            os.environ,
-            {
-                "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
-                "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "1",
-            },
-            clear=True,
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ, {"ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root}, clear=True
         ):
-            with self.assertRaisesRegex(RuntimeError, "未配置 ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST"):
-                gp_generic.run_tool(arcpy, "management.CopyFeatures", {})
+            self.assertTrue(gp_generic.generic_gp_enabled())
+            for name in ("management.CopyFeatures", "CopyFeatures_management", "analysis.buffer"):
+                gp_generic.run_tool(arcpy, name, {"out_feature_class": str(Path(root) / "result.shp")})
+        self.assertEqual(len(arcpy.management.calls), 3)
 
-    def test_generic_gp_validates_paths_for_allowlisted_tool(self) -> None:
+    def test_legacy_allowlist_does_not_restrict_native_tool_names(self) -> None:
+        arcpy = _FakeArcpy()
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {
+            "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root,
+            "ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST": "unrelated.Tool",
+        }, clear=True):
+            gp_generic.run_tool(arcpy, "management.CopyFeatures", {
+                "out_feature_class": str(Path(root) / "result.shp"),
+            })
+            self.assertEqual(gp_generic.generic_gp_allowlist(), [])
+        self.assertEqual(len(arcpy.management.calls), 1)
+
+    def test_only_registered_gp_tools_can_be_called(self) -> None:
+        arcpy = _FakeArcpy()
+        arcpy.management.Unregistered = MagicMock()
+        arcpy.GetInstallInfo = MagicMock()
+        for name in ("management.Unregistered", "GetInstallInfo", "os.system", "missing.Tool"):
+            with self.subTest(name=name), patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "未找到已注册的原生 GP 工具"):
+                    gp_generic.run_tool(arcpy, name, {})
+        arcpy.management.Unregistered.assert_not_called()
+        arcpy.GetInstallInfo.assert_not_called()
+
+    def test_missing_catalog_and_noncallable_tool_fail_before_execution(self) -> None:
+        arcpy = _FakeArcpy()
+        with patch.dict(os.environ, {}, clear=True), patch.object(arcpy, "ListTools", None):
+            with self.assertRaisesRegex(RuntimeError, "缺少 ListTools"):
+                gp_generic.run_tool(arcpy, "management.CopyFeatures", {})
+        with patch.dict(os.environ, {}, clear=True), patch.object(arcpy, "CopyFeatures_management", None):
+            with self.assertRaisesRegex(RuntimeError, "不可调用"):
+                gp_generic.run_tool(arcpy, "management.CopyFeatures", {})
+        self.assertEqual(arcpy.management.calls, [])
+
+    def test_generic_gp_still_respects_read_only_deployment(self) -> None:
+        arcpy = _FakeArcpy()
+        with patch.dict(os.environ, {"ARCGIS_PRO_MCP_ALLOW_WRITE": "0"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "ARCGIS_PRO_MCP_ALLOW_WRITE"):
+                gp_generic.run_tool(arcpy, "management.CopyFeatures", {})
+        self.assertEqual(arcpy.management.calls, [])
+
+    def test_generic_gp_validates_paths_for_native_tool(self) -> None:
         arcpy = _FakeArcpy()
         with tempfile.TemporaryDirectory() as input_root, tempfile.TemporaryDirectory() as output_root:
             in_features = str(Path(input_root) / "roads.shp")
@@ -83,7 +126,6 @@ class GenericGPTests(unittest.TestCase):
                 {
                     "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
                     "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "1",
-                    "ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST": "management.CopyFeatures",
                     "ARCGIS_PRO_MCP_INPUT_ROOTS": input_root,
                     "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
                 },
@@ -109,7 +151,6 @@ class GenericGPTests(unittest.TestCase):
             {
                 "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
                 "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "1",
-                "ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST": "management.CopyFeatures",
                 "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
             },
             clear=True,
@@ -139,7 +180,6 @@ class GenericGPTests(unittest.TestCase):
                 {
                     "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
                     "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "1",
-                    "ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST": "management.Buffer",
                     "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
                 },
                 clear=True,
@@ -147,11 +187,11 @@ class GenericGPTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "不允许内联敏感字符串参数"):
                     gp_generic.run_tool(
                         arcpy,
-                        "management.Buffer",
+                        "analysis.Buffer",
                         {"password": "secret", "out_feature_class": output},
                     )
 
-    def test_allowlist_cannot_enable_destructive_or_code_execution_tools(self) -> None:
+    def test_generic_gp_rejects_destructive_or_code_execution_tools(self) -> None:
         arcpy = _FakeArcpy()
         blocked = [
             "management.Delete",
@@ -166,16 +206,15 @@ class GenericGPTests(unittest.TestCase):
             {
                 "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
                 "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "1",
-                "ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST": ",".join(blocked),
             },
             clear=True,
         ):
             for tool_name in blocked:
                 with self.subTest(tool_name=tool_name):
-                    with self.assertRaisesRegex(RuntimeError, "allowlist 不能覆盖"):
+                    with self.assertRaisesRegex(RuntimeError, "永久拒绝"):
                         gp_generic.run_tool(arcpy, tool_name, {})
 
-    def test_generic_gp_rejects_in_place_tool_even_when_allowlisted(self) -> None:
+    def test_generic_gp_rejects_in_place_tool(self) -> None:
         arcpy = _FakeArcpy()
         with tempfile.TemporaryDirectory() as input_root, tempfile.TemporaryDirectory() as output_root:
             raster = str(Path(input_root) / "surface.tif")
@@ -184,7 +223,6 @@ class GenericGPTests(unittest.TestCase):
                 {
                     "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
                     "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "1",
-                    "ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST": "management.BuildPyramids",
                     "ARCGIS_PRO_MCP_INPUT_ROOTS": input_root,
                     "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
                 },
@@ -207,7 +245,6 @@ class GenericGPTests(unittest.TestCase):
                 {
                     "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
                     "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "1",
-                    "ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST": "management.CopyFeatures",
                 },
                 clear=True,
             ):
@@ -218,4 +255,3 @@ class GenericGPTests(unittest.TestCase):
                         {"in_features": output, "out_feature_class": output},
                     )
         self.assertEqual(arcpy.management.calls, [])
-

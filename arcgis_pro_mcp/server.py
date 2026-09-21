@@ -130,7 +130,8 @@ mcp = FastMCP(
         "aprx_path=CURRENT 使用 Pro 内 Python v4 宿主，arcgis_pro_sdk_* 使用可选原生 Add-In。"
         "先调用 environment_info、server_capabilities 和 tool_info；写入、破坏性操作、"
         "CIM、企业维护、发布及 SDK 编辑分别受独立门禁控制。输入、工程、导出和 GP 输出"
-        "必须遵守各自路径根；通用 GP 默认关闭且须精确 allowlist。实时宿主、租约、generation"
+        "必须遵守各自路径根；GP 优先使用原生工具通用入口，默认开启且无需工具白名单；"
+        "仍须遵守新输出与操作类型限制。实时宿主、租约、generation"
         "或目标变化时失败关闭，不得自动切换模式或盲目重试未知结果。真实执行须在 Windows"
         "上使用能导入 arcpy 的 ArcGIS Pro Python。"
     ),
@@ -727,6 +728,8 @@ def arcgis_pro_environment_info() -> str:
     info["project_roots_configured"] = bool(project_roots())
     info["generic_gp_enabled"] = gp_generic.generic_gp_enabled()
     info["generic_gp_allowlist"] = gp_generic.generic_gp_allowlist()
+    info["generic_gp_allowlist_required"] = False
+    info["preferred_gp_execution"] = "native_generic"
     info.update(_window_status_fields())
     return _json_dumps(info)
 
@@ -1223,6 +1226,8 @@ def arcgis_pro_server_capabilities() -> str:
                 "legacy_tool_success_is_quality_qualification": False,
             },
             "generic_gp_allowlist": gp_generic.generic_gp_allowlist(),
+            "generic_gp_allowlist_required": False,
+            "preferred_gp_execution": "native_generic",
             **_window_status_fields(),
             "tools_read_only": tools_read,
             "tools_require_allow_write": tools_write,
@@ -6526,7 +6531,12 @@ def arcgis_pro_set_time_slider(
 
 @mcp.tool(
     name="arcgis_pro_gp_run_tool",
-    description="",
+    description=(
+        "优先通过原生 GP 工具名（如 analysis.Buffer 或 Buffer_analysis）与原生命名参数执行地理处理。"
+        "默认开启，无需部署工具白名单；工具必须存在于 ArcPy ListTools。"
+        "需要写入权限和 GP 输出根内的完整新输出路径，禁止覆盖、原地修改和代码执行。"
+        "需要 CURRENT、质量检查或专用语义时使用对应接口。"
+    ),
 )
 def arcgis_pro_gp_run_tool(
     tool_name: str,

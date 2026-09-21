@@ -546,7 +546,6 @@ def tool_policy(name: str) -> dict[str, Any]:
         gates.extend(
             [
                 "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP",
-                "ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST",
                 "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT",
             ]
         )

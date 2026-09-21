@@ -642,6 +642,18 @@ class ServerToolTests(unittest.TestCase):
         self.assertEqual(quality["checker_version"], "test-version")
         self.assertEqual(quality["required_checks"], ["existing-check", "new-check"])
 
+    def test_capabilities_prefer_native_gp_without_deployment_allowlist(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            server, "_window_status_fields", return_value={}
+        ), patch.object(server, "_arcpy", return_value=SimpleNamespace()):
+            capabilities = json.loads(server.arcgis_pro_server_capabilities())
+            environment = json.loads(server.arcgis_pro_environment_info())
+        for payload in (capabilities, environment):
+            self.assertTrue(payload["generic_gp_enabled"])
+            self.assertFalse(payload["generic_gp_allowlist_required"])
+            self.assertEqual(payload["generic_gp_allowlist"], [])
+            self.assertEqual(payload["preferred_gp_execution"], "native_generic")
+
     def test_open_map_view_can_focus_it_after_closing_views(self) -> None:
         target_map = SimpleNamespace(name="Target", openView=MagicMock())
         project = SimpleNamespace(closeViews=MagicMock())

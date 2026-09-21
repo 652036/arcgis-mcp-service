@@ -20,6 +20,7 @@
 - checked 裁剪不再把显式传入的空或格式错误的 `validity` 当成默认值。省略该参数可使用原始值空间；也可明确提供 `{"value_space": "RAW"}` 或 `{"value_space": "PHYSICAL"}` 及所需阈值。
 
 ### 变更
+- 文件模式 GP 默认优先通过 `arcgis_pro_gp_run_tool` 执行原生工具。未设置 `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP` 时默认开启，不再要求部署工具白名单，旧 `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` 配置不再生效。已有客户端显式设为 `0` 时，需要删除该配置或改成 `1`。原生 `module.Tool` 和 `Tool_toolbox` 名称均从 ArcPy 注册目录解析；写入权限、输出根、新输出检查和禁止操作检查仍生效，CURRENT/SDK 与质量检查工作流保留各自契约。能力响应新增 `generic_gp_allowlist_required=false`、`preferred_gp_execution=native_generic`，兼容字段 `generic_gp_allowlist` 固定返回空列表。
 - 未设置 `ARCGIS_PRO_MCP_ALLOW_WRITE` 时，普通工程、地图和数据写入现在默认启用；
   设为 `0`、`false`、`no` 或 `off` 可切换为只读。破坏性、CIM、企业维护、发布和
   SDK 编辑门禁仍默认关闭。

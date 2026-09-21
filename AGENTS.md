@@ -11,7 +11,7 @@
 - Start with `arcgis_pro_environment_info` and `arcgis_pro_server_capabilities`.
 - Do not run write-gated tools unless `ARCGIS_PRO_MCP_ALLOW_WRITE` is enabled.
 - Respect `ARCGIS_PRO_MCP_EXPORT_ROOT`, `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT`, `ARCGIS_PRO_MCP_INPUT_ROOTS`, and `ARCGIS_PRO_MCP_PROJECT_ROOTS`.
-- Prefer named GP wrappers. Use `arcgis_pro_gp_run_tool` only when generic GP is enabled and the exact tool is allowlisted.
+- Prefer native GP tools through `arcgis_pro_gp_run_tool` for supported file-based operations. Generic GP is enabled by default without a deployment tool allowlist; confirm the native name and parameter contract. Use dedicated wrappers for CURRENT context, checked quality workflows, or operations outside the generic new-output contract.
 - Prefer saving project copies or controlled outputs over overwriting source `.aprx` files or geodatabases.
 - To drive the open Pro GUI, the user must run `接入当前窗口.pyt` or `接入当前窗口.py` in Pro; then use `aprx_path=CURRENT`. Verify `arcgis_pro_window_status.host_ready` and `current_project` first. CURRENT calls fail closed if the authenticated host/session is unavailable or the project changes; absolute `.aprx` paths remain file mode.
 

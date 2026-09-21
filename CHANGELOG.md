@@ -20,6 +20,7 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 - Explicitly supplied empty or malformed checked-clip `validity` policies are rejected. Omit `validity` to use the default raw value space, or provide `{"value_space": "RAW"}` / `{"value_space": "PHYSICAL"}` with any declared limits.
 
 ### Changed
+- Native file-based GP now defaults to `arcgis_pro_gp_run_tool`. Generic GP is enabled when `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP` is unset and no longer requires a deployment tool allowlist; `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` is ignored. Remove a previous explicit `0` or change it to `1` to enable existing client configurations. Native `module.Tool` and `Tool_toolbox` names resolve through the live ArcPy GP catalog. Base write permission, output roots, new-output checks and prohibited operation checks still apply; CURRENT/SDK and checked quality workflows retain their dedicated contracts. Capability responses expose `generic_gp_allowlist_required=false` and `preferred_gp_execution=native_generic`; the legacy `generic_gp_allowlist` field remains an empty list for compatibility.
 - Ordinary project, map, and data writes are now enabled when
   `ARCGIS_PRO_MCP_ALLOW_WRITE` is unset. Set it to `0`, `false`, `no`, or `off`
   for a read-only deployment. Destructive, CIM, enterprise, publishing, and SDK

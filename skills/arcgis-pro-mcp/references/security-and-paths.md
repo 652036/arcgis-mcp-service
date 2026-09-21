@@ -22,8 +22,8 @@ Ordinary reads and writes are enabled by default. Set `ARCGIS_PRO_MCP_ALLOW_WRIT
 | `ARCGIS_PRO_MCP_PROJECT_ROOTS` | Optional project-path restriction and project discovery roots. Falls back to input roots when unset. |
 | `ARCGIS_PRO_MCP_EXPORT_ROOT` | Required absolute root for exports, project copies, layer/map documents, charts, reports, sharing artifacts, and other artifact outputs. |
 | `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` | Restricts durable GP/data outputs. Many write wrappers require a configured absolute root rather than treating it as optional. |
-| `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP` | Enables the standalone generic GP entry point; disabled by default. |
-| `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` | Exact standalone generic GP names. An allowlist entry does not bypass typed path validation. |
+| `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP` | Standalone generic GP is enabled when unset; set `0`, `false`, `no`, or `off` to disable it. |
+| `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` | Deprecated and ignored. No deployment tool allowlist is required for standalone generic GP. |
 | `ARCGIS_PRO_MCP_PORTAL_ALLOWLIST` | Exact canonical HTTPS Portal targets for publishing. |
 | `ARCGIS_PRO_MCP_SERVER_ALLOWLIST` | Exact canonical HTTPS server/FeatureServer targets or exact approved `.ags` connection paths, depending on the tool. |
 | `ARCGIS_PRO_MCP_HOST_PORT` | Matches one Python CURRENT host to one MCP client. Use a distinct explicit port for each concurrent Pro instance. |
@@ -61,7 +61,7 @@ Obtain these values from a fresh read/preflight and echo them unchanged. Never i
 
 ## Generic And SDK GP
 
-Prefer named Python wrappers. `arcgis_pro_gp_run_tool` requires the base write gate, generic-GP enablement, an exact allowlist match, input validation, a configured GP output root, and at least one complete durable output path. It rejects output workspace/name pairs because they do not prove the final target, as well as no-output/in-place operations, existing targets, destructive tools, and code-execution tools. It runs under `overwriteOutput=False`; an allowlist entry cannot relax any of these rules.
+Prefer `arcgis_pro_gp_run_tool` for supported native file-based GP. It is enabled by default and no longer reads a deployment tool allowlist. Names resolve through the live ArcPy GP catalog, not arbitrary Python attributes. Base write permission, input validation, a configured GP output root, and at least one complete durable output path remain required. It rejects output workspace/name pairs because they do not prove the final target, as well as no-output/in-place operations, existing targets, destructive tools, and code-execution tools. It runs under `overwriteOutput=False`. Dedicated wrappers remain necessary for operations outside this contract, checked quality workflows and project/window context.
 
 `arcgis_pro_current_map_run_analysis` follows the same new-output/root boundary while additionally accepting typed references to layers or tables in the attached map. It has a closed code allowlist and explicitly denies Calculate Field, Calculate Geometry Attributes, and Repair Geometry. Use their reviewed semantic wrappers where available.
 

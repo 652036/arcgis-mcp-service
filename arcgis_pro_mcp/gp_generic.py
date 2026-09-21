@@ -20,12 +20,9 @@ from arcgis_pro_mcp.redaction import redact_text
 
 _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]+$")
 _GENERIC_GP_ENABLE_ENV = "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP"
-_GENERIC_GP_ALLOWLIST_ENV = "ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST"
-_GENERIC_GP_SPLIT_RE = re.compile(r"[\n,;]+")
 
-# A deployment allowlist is not a per-call destructive confirmation and must not
-# turn the generic endpoint into a Python/script execution surface.  Match the
-# operation rather than an exact qualified spelling so modern names
+# The generic endpoint must not become a destructive or Python/script execution
+# surface. Match the operation rather than an exact qualified spelling so modern names
 # (``management.Delete``), legacy aliases (``Delete_management``), casing, and
 # toolbox aliases cannot bypass this boundary.
 _HARD_DENIED_OPERATION_PREFIXES = (
@@ -78,16 +75,13 @@ _OUTPUT_NAME_KEYS = frozenset(
 
 
 def generic_gp_enabled() -> bool:
-    value = os.environ.get(_GENERIC_GP_ENABLE_ENV, "").strip().lower()
+    value = os.environ.get(_GENERIC_GP_ENABLE_ENV, "1").strip().lower()
     return value in ("1", "true", "yes", "on")
 
 
 def generic_gp_allowlist() -> list[str]:
-    raw = os.environ.get(_GENERIC_GP_ALLOWLIST_ENV, "").strip()
-    if not raw:
-        return []
-    names = [x.strip() for x in _GENERIC_GP_SPLIT_RE.split(raw) if x.strip()]
-    return sorted(dict.fromkeys(names))
+    """Compatibility field: deployment allowlists are no longer used."""
+    return []
 
 
 def _operation_name(tool_name: str) -> str:
@@ -104,24 +98,35 @@ def _ensure_tool_is_not_hard_denied(tool_name: str) -> None:
     if operation.startswith(_HARD_DENIED_OPERATION_PREFIXES):
         raise RuntimeError(
             f"工具 {tool_name!r} 属于通用 GP 永久拒绝的破坏性或代码执行操作；"
-            "allowlist 不能覆盖此限制，请使用带精确目标、确认值和专用门禁的语义工具。"
+            "请使用带精确目标、确认值和专用门禁的语义工具。"
         )
 
 
 def _ensure_generic_tool_allowed(tool_name: str) -> None:
     if not generic_gp_enabled():
-        raise RuntimeError(
-            f"通用 GP 已禁用。设置 {_GENERIC_GP_ENABLE_ENV}=1 并通过"
-            f" {_GENERIC_GP_ALLOWLIST_ENV} 显式列出允许的工具名后才能使用。"
-        )
-    allowlist = {name.lower() for name in generic_gp_allowlist()}
-    if not allowlist:
-        raise RuntimeError(f"未配置 {_GENERIC_GP_ALLOWLIST_ENV}，拒绝执行通用 GP")
-    if tool_name.lower() not in allowlist:
-        raise RuntimeError(
-            f"工具 {tool_name!r} 不在 {_GENERIC_GP_ALLOWLIST_ENV} 允许列表中"
-        )
+        raise RuntimeError(f"通用 GP 已禁用。设置 {_GENERIC_GP_ENABLE_ENV}=1 或移除此配置即可启用。")
     _ensure_tool_is_not_hard_denied(tool_name)
+
+
+def _resolve_registered_tool(arcpy: Any, tool_name: str) -> Any:
+    """Resolve a GP catalog entry, never an arbitrary attribute of arcpy."""
+    parts = tool_name.split(".")
+    if len(parts) == 2:
+        candidate = f"{parts[1]}_{parts[0]}"
+    elif len(parts) == 1:
+        candidate = parts[0]
+    else:
+        raise RuntimeError("tool_name 格式须为 'module.Tool' 或 'Tool_toolbox'")
+    list_tools = getattr(arcpy, "ListTools", None)
+    if not callable(list_tools):
+        raise RuntimeError("当前 ArcPy 缺少 ListTools，无法确认原生 GP 工具")
+    registered = next((name for name in list_tools() or [] if name.casefold() == candidate.casefold()), None)
+    if registered is None:
+        raise RuntimeError(f"未找到已注册的原生 GP 工具: {tool_name}")
+    func = getattr(arcpy, registered, None)
+    if not callable(func):
+        raise RuntimeError(f"已注册的 GP 工具不可调用: {registered}")
+    return func
 
 
 def _path_mode_for_key(key: str | None) -> str | None:
@@ -241,6 +246,7 @@ def run_tool(
     if not _TOOL_RE.match(tn):
         raise RuntimeError("tool_name 格式不合法（如 analysis.Buffer 或 management.Clip）")
     _ensure_generic_tool_allowed(tn)
+    func = _resolve_registered_tool(arcpy, tn)
     require_gp_output_root_mandatory()
     supplied_parameters = parameters or {}
     if not isinstance(supplied_parameters, dict):
@@ -255,21 +261,6 @@ def run_tool(
     existing = [target for target in targets if _output_exists(arcpy, target)]
     if existing:
         raise RuntimeError(f"通用 GP 拒绝覆盖已有输出：{existing[:20]}")
-    parts = tn.split(".")
-    if len(parts) == 2:
-        module_name, func_name = parts
-        mod = getattr(arcpy, module_name, None)
-        if mod is None:
-            raise RuntimeError(f"未找到 arcpy 模块: {module_name}")
-        func = getattr(mod, func_name, None)
-        if func is None:
-            raise RuntimeError(f"未找到工具: {tn}")
-    elif len(parts) == 1:
-        func = getattr(arcpy, parts[0], None)
-        if func is None:
-            raise RuntimeError(f"未找到工具: {tn}")
-    else:
-        raise RuntimeError("tool_name 格式须为 'module.Tool' 或 'Tool'")
     with _overwrite_disabled(arcpy):
         result = func(**params)
     msgs: list[str] = []

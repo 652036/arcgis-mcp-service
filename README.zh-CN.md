@@ -50,7 +50,7 @@ ArcGIS Pro MCP 服务
 - 发布：共享草稿、服务定义暂存与发布，并对 Portal/Server、公开共享及覆盖发布分别设门禁。
 - 实时控制：Python `CURRENT` 视图和选择操作；SDK 活动上下文、事件、相机、时间、原生编辑和可取消的白名单 GP 作业。
 
-本项目不是任意 Python、任意 CIM、任意 GP 或桌面鼠标点击代理。通用 GP 默认关闭；SDK 也只接受代码中已有的 typed contract。
+原生 GP 可通过默认开启的通用入口调用，无需部署工具白名单，仍遵守相应的写入与输出规则。本项目不开放任意 Python 执行或通用桌面鼠标点击。SDK 只接受代码中已有的 typed contract。
 
 ## 环境要求
 
@@ -100,7 +100,7 @@ python -c "import arcpy; print(arcpy.GetInstallInfo()['Version'])"
         "ARCGIS_PRO_MCP_EXPORT_ROOT": "C:\\GIS_Outputs",
         "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": "C:\\GIS_Outputs\\GP",
         "ARCGIS_PRO_MCP_DB_INSTANCE_ALLOWLIST": "SQL_SERVER|db.example.internal",
-        "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "0"
+        "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "1"
       }
     }
   }
@@ -221,7 +221,7 @@ SDK 写请求使用 `expectedMapUri`、context/selection/edit generation、选�
 | `ARCGIS_PRO_MCP_PROJECT_ROOTS` | 限制 `.aprx` 根目录；未设置时回退到输入根 |
 | `ARCGIS_PRO_MCP_EXPORT_ROOT` | 约束地图、布局、报表、图表及审计导出 |
 | `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` | 写入型 GP 的强制输出根目录 |
-| `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP=1` + `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` | Python 通用 GP 的双重开关 |
+| `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP` | Python 通用 GP 默认开启；设为 `0` 可关闭，不需要工具白名单 |
 | `ARCGIS_PRO_MCP_PORTAL_ALLOWLIST` / `ARCGIS_PRO_MCP_SERVER_ALLOWLIST` | 发布和企业连接目标限制 |
 | `ARCGIS_PRO_MCP_SDK_GP_ALLOWLIST` / `ARCGIS_PRO_MCP_SDK_GP_ENV_ALLOWLIST` | SDK GP 工具和环境白名单 |
 | `ARCGIS_PRO_MCP_SDK_ALLOW_EDIT_COMMANDS=1` | SDK Undo/Redo/保存类编辑命令 |
@@ -233,7 +233,7 @@ SDK 写请求使用 `expectedMapUri`、context/selection/edit generation、选�
 
 - 不要把密码、Portal token、窗口 bearer、租约 ID 或连接字符串提交到仓库、Issue、日志或截图。
 - 数据库连接优先使用 ArcGIS 管理的现有连接文件。创建新 `.sde` 时必须命中 `ARCGIS_PRO_MCP_DB_INSTANCE_ALLOWLIST`，只会读取固定的 `ARCGIS_PRO_MCP_DB_USERNAME` / `ARCGIS_PRO_MCP_DB_PASSWORD`；内联密码默认拒绝，凭据默认不保存到连接文件。
-- 写入型 GP 必须位于已配置的 GP 输出根下。通用 GP 还必须同时开启并精确 allowlist，每次提供至少一个完整 `out_*` 目标路径；输出容器与名称分离、原地/无输出、破坏性和代码执行工具均被拒绝。
+- 支持的文件模式 GP 优先通过 `arcgis_pro_gp_run_tool` 调用原生工具，直接传入原生工具名和命名参数。通用 GP 默认开启，无需部署工具白名单，旧 `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` 配置不再生效；`analysis.Buffer` 和 `Buffer_analysis` 两种名称均从 ArcPy 注册目录解析。写入型 GP 必须位于已配置的 GP 输出根下，每次提供至少一个完整 `out_*` 目标路径；输出容器与名称分离、原地/无输出、破坏性和代码执行工具仍被拒绝。需要质量检查、工程/窗口上下文或超出该契约的操作时，使用对应专用接口。
 - 通用 GP 和 `CURRENT` 窗口分析拒绝已有输出，并在执行期强制 `overwriteOutput=False`。地图、布局、报表、图表、工程副本以及本地发布草稿/服务定义导出同样要求新文件；外部服务覆盖仍由独立发布覆盖门禁控制。
 - `arcgis_pro_gp_calculate_field` 只接受受限的纯 Arcade 表达式，不接受 Python/VB/code block 或远程动态取数；标注表达式也仅允许 Arcade，相关 CIM 标注写入还要求 CIM 门禁。`arcgis_pro_gp_repair_geometry` 固定使用 `KEEP_NULL`，不会借修复之名删除空几何记录。
 - 普通要素/行编辑由 `ARCGIS_PRO_MCP_ALLOW_WRITE` 授权；删除等操作再要求 destructive，SDK 原生要素编辑再要求 SDK feature gate。`ARCGIS_PRO_MCP_ALLOW_ENTERPRISE_WRITE` 只额外保护企业版本管理、维护和 Utility Network 管理操作。

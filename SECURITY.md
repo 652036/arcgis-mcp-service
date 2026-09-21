@@ -37,7 +37,7 @@ The server is designed around the assumption that:
 - the MCP client may be partially untrusted (e.g. driven by an LLM),
 - the server operator controls the environment variables that gate ordinary,
   destructive, CIM, publishing, public-sharing, enterprise, and SDK-native
-  writes, along with every input/output root and GP allowlist,
+  writes, along with every input/output root and the separate SDK GP allowlists,
 - the Python window host and optional SDK Add-In listen only on loopback and
   are never proxied or exposed to another machine,
 - any Portal, Server, enterprise-geodatabase, or local network-dataset access
@@ -47,14 +47,14 @@ Issues we consider in-scope include:
 
 - path-validation bypasses that allow reads or writes outside the configured
   roots,
-- ways to execute GP tools that are not in the allowlist when the generic GP
-  runner is disabled, or to use an allowlisted generic/current-map GP call for
+- ways to execute GP tools through the generic runner when it is explicitly
+  disabled, call non-GP Python functions, or use a generic/current-map GP call for
   in-place, destructive, code-executing, ambiguous-output, or overwrite work,
 - leaks or unintended use of the fixed database credential environment variables,
 - disclosure of window-host bearer tokens, SDK discovery tokens, lease IDs,
   connection passwords, Portal tokens, or signed preflight tokens,
 - any operation that modifies data despite `ARCGIS_PRO_MCP_ALLOW_WRITE` being
-  unset, or bypasses a more specific destructive/publish/enterprise/SDK gate,
+  explicitly disabled, or bypasses a more specific destructive/publish/enterprise/SDK gate,
 - silent fallback from an authenticated `CURRENT` request to file mode, or a
   write applied after the attached project/session has changed.
 
@@ -72,11 +72,13 @@ Out of scope:
 - Scope `ARCGIS_PRO_MCP_INPUT_ROOTS`, `ARCGIS_PRO_MCP_PROJECT_ROOTS`,
   `ARCGIS_PRO_MCP_EXPORT_ROOT`, and `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` to the
   smallest practical directories. Do not use a drive root as a convenience.
-- Generic GP requires the base write gate, explicit enablement, an exact
-  allowlist entry, a configured GP output root, and at least one complete output
+- Generic GP is enabled by default without a deployment tool allowlist. It
+  resolves names from the live ArcPy GP catalog and requires the base write gate,
+  a configured GP output root, and at least one complete output
   path. Container/name output pairs, in-place or no-output operations,
   destructive/code-executing tools, and existing targets are rejected;
-  execution forces `overwriteOutput=False`.
+  execution forces `overwriteOutput=False`. Set `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP=0`
+  to disable this entry point; the old generic-GP allowlist variable is ignored.
 - Local exports and publishing artifacts must use new paths under the export
   root. Service overwrite is a separate external operation guarded by the
   publishing-overwrite gate; it does not authorize replacing local files.
@@ -85,7 +87,7 @@ Out of scope:
   `ARCGIS_PRO_MCP_DB_USERNAME` and `ARCGIS_PRO_MCP_DB_PASSWORD` variables,
   never a caller-chosen environment variable; credentials are not saved unless
   the call explicitly confirms that choice.
-- Leave generic GP, publishing, enterprise writes, raw CIM writes, destructive
+- Leave publishing, enterprise writes, raw CIM writes, destructive
   operations, and SDK native edits disabled unless the corresponding workflow
   is explicitly required.
 - `ARCGIS_PRO_MCP_ALLOW_ENTERPRISE_WRITE` protects enterprise version
