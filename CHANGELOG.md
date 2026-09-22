@@ -7,7 +7,7 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 ## [Unreleased]
 
 ### GIS reliability
-- Native Weighted Overlay now accepts a root-checked JSON WOTable with validated weights, scales and value remaps through generic GP. Add an opt-in real MCP ecological acceptance workflow covering full-cell costs, paths, areas and failure gates; see [English](docs/ECOLOGICAL_QA.md) / [中文](docs/ECOLOGICAL_QA.zh-CN.md).
+- Native Weighted Overlay now accepts a root-checked JSON WOTable with validated weights, scales and value remaps through generic GP.
 - Generic GP preserves the geostatistical model-parameter XPath as an XML selector while continuing to enforce roots on input/output model files.
 - Output path preparation no longer creates filesystem directories inside geodatabases or database connection files, where they can shadow catalog datasets.
 - Topology rule removal preserves native errors and never substitutes a fixed object-class ID. Supply the exact rule identifier for the current topology.

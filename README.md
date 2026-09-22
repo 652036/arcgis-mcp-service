@@ -12,8 +12,6 @@ Version 2.0 provides 400+ registered tools for projects, maps, layers, layouts, 
 
 Recent work includes explicit clipping modes, full-extent coverage checks, and result qualification gates. See [GIS reliability scope and limitations](docs/GIS_RELIABILITY.md) (Chinese).
 
-Native Weighted Overlay JSON parameters and the opt-in local-data MCR acceptance workflow are documented in [Ecological workflow acceptance](docs/ECOLOGICAL_QA.md).
-
 ## Execution modes
 
 Each mode serves a distinct purpose. Requests never silently fall back to another mode.
