@@ -4,12 +4,13 @@ import sys
 
 from arcgis_pro_mcp.pro_attach import install_stdio_proxy
 from arcgis_pro_mcp.server import mcp
+from arcgis_pro_mcp.stdio_runtime import run_stdio
 
 
 def main() -> None:
     try:
         install_stdio_proxy(mcp)
-        mcp.run()
+        run_stdio(mcp)
     except KeyboardInterrupt:
         sys.exit(130)
     except Exception as exc:  # noqa: BLE001 - top-level guard

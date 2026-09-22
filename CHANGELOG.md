@@ -7,6 +7,10 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 ## [Unreleased]
 
 ### GIS reliability
+- Native Weighted Overlay now accepts a root-checked JSON WOTable with validated weights, scales and value remaps through generic GP. Add an opt-in real MCP ecological acceptance workflow covering full-cell costs, paths, areas and failure gates; see [English](docs/ECOLOGICAL_QA.md) / [中文](docs/ECOLOGICAL_QA.zh-CN.md).
+- Generic GP preserves the geostatistical model-parameter XPath as an XML selector while continuing to enforce roots on input/output model files.
+- Output path preparation no longer creates filesystem directories inside geodatabases or database connection files, where they can shadow catalog datasets.
+- Topology rule removal preserves native errors and never substitutes a fixed object-class ID. Supply the exact rule identifier for the current topology.
 - Add `arcgis_pro_analysis_asset_info`, `arcgis_pro_gp_clip_raster_checked`, and `arcgis_pro_analysis_result_status` for file-mode clipping with versioned snapshots, explicit geometry, independent full-domain QA and immutable run IDs.
 - Reclassify adds `remap_mode=RANGE|VALUE` and `missing_values=DATA|NODATA|ERROR`. `ERROR` scans supported GeoTIFF inputs before execution and requires `reclass_field=Value` (case-insensitive); raster attribute fields are rejected because pixel values cannot validate their mappings.
 - Clip and ExtractByMask add scoped `environment` settings with `UNSET`, `CLEAR`, and `VALUE` states. ZonalStatisticsAsTable exposes `ignore_nodata=DATA|NODATA`.
@@ -27,6 +31,7 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
   edit gates remain disabled by default.
 
 ### Fixed
+- The standalone MCP server now reserves separate UTF-8 protocol pipes and routes native stdout diagnostics to stderr. ArcPy's local-code-page messages, Win32 stdout writes, and scripts closing Python stdin no longer corrupt the JSON-RPC stream.
 - Native GP dispatch now resolves registered Spatial/Image Analyst tools through `arcpy.gp` when a top-level ArcPy alias is absent, using native parameter order and preserving optional gaps. Unknown keyword parameters are rejected before execution.
 - Generic GP now uses native parameter direction metadata for path validation and output discovery, allowing inputs such as `clip_features`, `erase_features`, `target_features`, and `near_features` without weakening configured roots.
 - Raw native RasterCalculator remains outside generic GP's code-execution boundary; use the dedicated calculator with explicit raster bindings and validated expressions.

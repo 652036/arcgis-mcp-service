@@ -149,6 +149,18 @@ def validate_gp_output_path(output_path: str, label: str, *, create_parent: bool
         raise RuntimeError(f"{label} 必须位于 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT 内：{rr}")
     parent = os.path.dirname(p)
     if parent and create_parent:
+        # Catalog members are not filesystem directories. Creating a folder
+        # such as data.gdb/FD shadows the real ArcGIS feature dataset.
+        ancestor = parent
+        while ancestor:
+            if os.path.splitext(ancestor)[1].lower() in {
+                ".gdb", ".geodatabase", ".sde", ".mdb", ".gpkg", ".sqlite",
+            }:
+                parent = os.path.dirname(ancestor)
+            next_ancestor = os.path.dirname(ancestor)
+            if next_ancestor == ancestor:
+                break
+            ancestor = next_ancestor
         os.makedirs(parent, exist_ok=True)
     return p
 

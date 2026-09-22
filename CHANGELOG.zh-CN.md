@@ -7,6 +7,10 @@
 ## [Unreleased]
 
 ### GIS 可靠性
+- 通用 GP 为原生加权叠加增加结构化 JSON WOTable，校验内嵌路径、权重、评价尺度和值映射；增加真实 MCP 生态流程实测，覆盖完整像元成本、路径、面积及失败阻断。详见[中文](docs/ECOLOGICAL_QA.zh-CN.md) / [English](docs/ECOLOGICAL_QA.md)。
+- 通用 GP 将地统计模型参数的 XPath 正确作为 XML 选择器传递；输入、输出模型文件仍须满足路径根限制。
+- 输出路径准备不再在地理数据库或数据库连接文件内部创建普通目录，避免遮蔽原生目录中的数据集。
+- 拓扑规则删除保留原生错误，不再回退到固定的对象类编号；调用时需提供当前拓扑中的准确规则标识。
 - 新增 `arcgis_pro_analysis_asset_info`、`arcgis_pro_gp_clip_raster_checked` 和 `arcgis_pro_analysis_result_status`：文件模式裁剪、固定输入版本、明确范围、完整像元覆盖检查和不可重复执行的运行 UUID。
 - 重分类新增 `remap_mode=RANGE|VALUE` 和 `missing_values=DATA|NODATA|ERROR`。`ERROR` 在执行前扫描支持的 GeoTIFF，且要求 `reclass_field=Value`（不区分大小写）；不能用像元值验证栅格属性字段映射，因此拒绝这类字段。
 - Clip 和 ExtractByMask 新增局部 `environment` 参数，支持 `UNSET`、`CLEAR`、`VALUE`；ZonalStatisticsAsTable 显式提供 `ignore_nodata=DATA|NODATA`。
@@ -26,6 +30,7 @@
   SDK 编辑门禁仍默认关闭。
 
 ### 修复
+- 独立 MCP 服务现在使用专用 UTF-8 协议管道，并将原生标准输出诊断转到标准错误流，避免 ArcPy 本地编码消息、Win32 输出或脚本关闭 Python 标准输入破坏 JSON-RPC 通信。
 - 原生 GP 分发在缺少 ArcPy 顶层别名时，改用 `arcpy.gp` 调用已注册的 Spatial/Image Analyst 工具，按原生参数顺序传递并保留可选参数空位；执行前拒绝未知参数名。
 - 通用 GP 按原生参数方向元数据校验路径并识别输出，支持 `clip_features`、`erase_features`、`target_features`、`near_features` 等输入名称，仍执行已配置的路径根限制。
 - 原生 RasterCalculator 的原始代码表达式不通过通用入口开放；继续使用带显式栅格绑定和表达式校验的专用计算器。

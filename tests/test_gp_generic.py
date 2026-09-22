@@ -63,6 +63,34 @@ class _FakeArcpy:
 
 
 class GenericGPTests(unittest.TestCase):
+    def test_model_xpath_is_literal_but_model_files_remain_root_checked(self) -> None:
+        arcpy = _FakeArcpy()
+        native = MagicMock(return_value=_FakeResult())
+        arcpy.GASetModelParameter_ga = native
+        arcpy.ListTools = lambda: ["GASetModelParameter_ga"]
+        arcpy.GetParameterInfo = lambda _name: [
+            SimpleNamespace(name=name, parameterType="Required", direction=direction)
+            for name, direction in (
+                ("in_ga_model_source", "Input"), ("model_param_xpath", "Input"),
+                ("in_param_value", "Input"), ("out_ga_model", "Output"),
+            )
+        ]
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside, patch.dict(
+            os.environ, {"ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root, "ARCGIS_PRO_MCP_INPUT_ROOTS": root},
+            clear=True,
+        ):
+            params = {
+                "in_ga_model_source": str(Path(root) / "source.xml"),
+                "model_param_xpath": "/model[@name='IDW']/value[@name='Power']",
+                "in_param_value": "2", "out_ga_model": str(Path(root) / "result.xml"),
+            }
+            gp_generic.run_tool(arcpy, "ga.GASetModelParameter", params)
+            self.assertEqual(native.call_args.kwargs["model_param_xpath"], params["model_param_xpath"])
+            params["in_ga_model_source"] = str(Path(outside) / "source.xml")
+            with self.assertRaises(RuntimeError):
+                gp_generic.run_tool(arcpy, "GASetModelParameter_ga", params)
+        self.assertEqual(native.call_count, 1)
+
     def test_generic_gp_can_be_explicitly_disabled(self) -> None:
         arcpy = _FakeArcpy()
         for value in ("0", "false", "NO", "off", "", "invalid"):

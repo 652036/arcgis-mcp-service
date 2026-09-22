@@ -40,7 +40,7 @@ class _Management:
         return call
 
 
-class _RemoveRuleCompatibilityManagement(_Management):
+class _RejectFriendlyRuleManagement(_Management):
     def RemoveRuleFromTopology(self, *args: object, **kwargs: object) -> _Result:
         self.calls.append(("RemoveRuleFromTopology", args, kwargs))
         if args[1] == "Must Be Disjoint (Point)":
@@ -396,9 +396,9 @@ class DatasetManagementTests(unittest.TestCase):
         )
         self.assertEqual(kwargs, {})
 
-    def test_remove_topology_rule_retries_arcgis_pro_36_point_token(self) -> None:
+    def test_remove_topology_rule_preserves_error_without_guessing_class_id(self) -> None:
         arcpy = _Arcpy()
-        arcpy.management = _RemoveRuleCompatibilityManagement()
+        arcpy.management = _RejectFriendlyRuleManagement()
         with tempfile.TemporaryDirectory() as output_root, patch.dict(
             os.environ,
             {
@@ -408,22 +408,18 @@ class DatasetManagementTests(unittest.TestCase):
             clear=True,
         ):
             topology = str(Path(output_root) / "data.gdb" / "PointTopology")
-            dataset_management.run_remove_rule_from_topology(
-                arcpy,
-                topology,
-                "Must Be Disjoint (Point)",
-            )
+            with self.assertRaisesRegex(RuntimeError, "ERROR 000800"):
+                dataset_management.run_remove_rule_from_topology(
+                    arcpy,
+                    topology,
+                    "Must Be Disjoint (Point)",
+                )
         self.assertEqual(
             arcpy.management.calls,
             [
                 (
                     "RemoveRuleFromTopology",
                     (os.path.normpath(topology), "Must Be Disjoint (Point)"),
-                    {},
-                ),
-                (
-                    "RemoveRuleFromTopology",
-                    (os.path.normpath(topology), "Must Be Disjoint (8)"),
                     {},
                 ),
             ],

@@ -1,5 +1,7 @@
 # ArcGIS Pro MCP Runtime Notes
 
+The standalone stdio entry point reserves dedicated UTF-8 protocol streams before loading tool execution. Native ArcPy stdout diagnostics are routed to stderr, including Win32 standard-handle output. Preserve this separation when changing startup; a successfully completed native tool can otherwise break the client connection by printing local-code-page bytes into JSON-RPC.
+
 Use runtime discovery over this reference when they disagree. Real behavior also depends on the installed ArcGIS Pro version, licenses, data source, active UI state, and schema locks.
 
 ## Mode Selection
@@ -69,6 +71,9 @@ The SDK bridge is loopback-only. It does not provide a remote transport, Portal 
 
 ## Data And Selection Semantics
 
+- `ga.GASetModelParameter` accepts `model_param_xpath` as the native XML selector, not as a filesystem path. Input/output model paths still use the configured roots.
+- Geodatabase members and feature datasets are catalog paths, not filesystem directories. Output validation creates only directories outside database containers; create databases and feature datasets through native ArcGIS tools.
+- Remove topology rules using the exact native rule identifier, including the participating object-class IDs. A failed friendly rule name is not retried with a guessed or fixed ID.
 - Discover layers by URI or exact `long_name`. Grouped layers can share short display names.
 - ArcPy selection tools compare GP-derived counts with `Layer.getSelectionSet()` and report `selection_verified`. A mismatch is an unknown write result; re-read rather than replay.
 - DA inserts accept geometry through supported JSON/WKT tokens, not live Python geometry objects. Do not update OID/system fields.
@@ -85,3 +90,7 @@ The SDK bridge is loopback-only. It does not provide a remote transport, Portal 
 - The enterprise-write gate covers version management, maintenance, and Utility Network administration, not ordinary feature/row edits. Those use WRITE, destructive permission when applicable, and the SDK-feature gate for native SDK feature edits.
 - Output creation generally rejects an existing target. Generic GP and CURRENT map analysis require a complete path under the configured GP output root, reject in-place/destructive/code-execution work and existing targets, and force `overwriteOutput=False`. Local exports and publishing artifacts also require new paths; only an explicitly exposed external service-overwrite workflow can use its separate overwrite gate and exact confirmation.
 - Calculate Field uses only the constrained pure-Arcade subset; labels are Arcade-only. Repair Geometry always uses `KEEP_NULL` and therefore does not delete null-geometry rows.
+
+## GeoAnalytics Desktop Java startup
+
+If a local GeoAnalytics tool fails before analysis with `UnixDomainSockets.connect0`, `Invalid argument: connect`, and `Unable to establish loopback connection`, inspect the bundled Java temporary socket directory. A process-scoped `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=<existing-test-temp-directory>` can select an accessible directory; verify with an actual GeoAnalytics call. Keep this in the MCP client environment, use a narrow directory, preserve existing Java options, and do not change the system Java installation. This fixes the local Java transport prerequisite, not tool-specific data or parameter errors. See [Oracle networking properties](https://docs.oracle.com/en/java/javase/16/core/networking-properties.html).

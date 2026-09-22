@@ -7,7 +7,7 @@ import re
 from contextlib import contextmanager
 from typing import Any
 
-from arcgis_pro_mcp import session_refs
+from arcgis_pro_mcp import session_refs, weighted_overlay
 from arcgis_pro_mcp.paths import (
     inline_db_password_allowed,
     is_probably_path,
@@ -272,7 +272,18 @@ def run_tool(
     if unknown:
         raise RuntimeError(f"原生 GP 参数无效 ({tn}): {', '.join(sorted(unknown))}")
     params = {
-        key: _sanitize_parameter_value(key, value, by_name[key].direction.lower())
+        # Adapt compound native parameters only for exact registered contracts.
+        # A model XPath is an XML selector; embedded WOTable paths are validated.
+        key: weighted_overlay.native_table(arcpy, value) if (
+            tn.casefold() in {"sa.weightedoverlay", "weightedoverlay_sa"}
+            and key == "in_weighted_overlay_table"
+            and by_name[key].direction == "Input"
+        ) else value if (
+            tn.casefold() in {"ga.gasetmodelparameter", "gasetmodelparameter_ga"}
+            and key == "model_param_xpath"
+            and by_name[key].direction == "Input"
+            and isinstance(value, str)
+        ) else _sanitize_parameter_value(key, value, by_name[key].direction.lower())
         for key, value in supplied_parameters.items()
     }
     targets = _controlled_output_targets(params, {p.name for p in native_parameters if p.direction == "Output"})

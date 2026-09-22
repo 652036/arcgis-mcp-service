@@ -747,19 +747,7 @@ def run_remove_rule_from_topology(
     _require_exists(arcpy, topology, "topology_path")
     _require_schema_lock(arcpy, topology)
     cleaned_rule = _clean_name(rule_name, "rule_name", max_length=500)
-    try:
-        result = arcpy.management.RemoveRuleFromTopology(topology, cleaned_rule)
-    except Exception:  # noqa: BLE001
-        # ArcGIS Pro 3.6 accepts the friendly ``(Point)`` token when adding
-        # this rule but exposes only the legacy numeric token when removing it.
-        # Retry only this known compatibility case so unrelated GP errors are
-        # still reported unchanged.
-        if cleaned_rule != "Must Be Disjoint (Point)":
-            raise
-        result = arcpy.management.RemoveRuleFromTopology(
-            topology,
-            "Must Be Disjoint (8)",
-        )
+    result = arcpy.management.RemoveRuleFromTopology(topology, cleaned_rule)
     return _messages(result)
 
 

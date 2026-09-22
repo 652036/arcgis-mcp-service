@@ -1227,6 +1227,13 @@ def arcgis_pro_server_capabilities() -> str:
             },
             "generic_gp_allowlist": gp_generic.generic_gp_allowlist(),
             "generic_gp_allowlist_required": False,
+            "generic_gp_parameter_adapters": {
+                "WeightedOverlay_sa.in_weighted_overlay_table": {
+                    "format": "JSON object with rasters and evaluation_scale",
+                    "remap_type": "numeric RemapValue",
+                    "embedded_input_roots_enforced": True,
+                },
+            },
             "preferred_gp_execution": "native_generic",
             **_window_status_fields(),
             "tools_read_only": tools_read,
@@ -6535,6 +6542,8 @@ def arcgis_pro_set_time_slider(
         "优先通过原生 GP 工具名（如 analysis.Buffer 或 Buffer_analysis）与原生命名参数执行地理处理。"
         "默认开启，无需部署工具白名单；工具必须存在于 ArcPy ListTools。"
         "需要写入权限和 GP 输出根内的完整新输出路径，禁止覆盖、原地修改和代码执行。"
+        "WeightedOverlay 的 in_weighted_overlay_table 使用含 evaluation_scale 和 rasters 的 JSON 对象；"
+        "每行包含 raster、influence、field、remap（整数值对），所有 influence 之和须为 100。"
         "需要 CURRENT、质量检查或专用语义时使用对应接口。"
     ),
 )

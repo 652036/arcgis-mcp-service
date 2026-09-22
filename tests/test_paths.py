@@ -10,6 +10,36 @@ from arcgis_pro_mcp import paths
 
 
 class ProjectPathValidationTests(unittest.TestCase):
+    def test_gp_output_does_not_create_catalog_directories_inside_gdb(self) -> None:
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ, {"ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root}, clear=True,
+        ):
+            geodatabase = Path(root) / "data.GDB"
+            geodatabase.mkdir()
+            output = geodatabase / "FeatureDataset" / "roads"
+            self.assertEqual(paths.validate_gp_output_path(str(output), "output"), str(output))
+            self.assertFalse((geodatabase / "FeatureDataset").exists())
+
+    def test_gp_output_does_not_create_members_below_database_files(self) -> None:
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ, {"ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root}, clear=True,
+        ):
+            for suffix in (".geodatabase", ".sde", ".gpkg", ".sqlite", ".mdb"):
+                with self.subTest(suffix=suffix):
+                    database = Path(root) / ("data" + suffix)
+                    database.touch()
+                    output = database / "roads"
+                    self.assertEqual(paths.validate_gp_output_path(str(output), "output"), str(output))
+                    self.assertTrue(database.is_file())
+
+    def test_gp_output_still_creates_ordinary_parent_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ, {"ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root}, clear=True,
+        ):
+            output = Path(root) / "rasters" / "new" / "result.tif"
+            paths.validate_gp_output_path(str(output), "output")
+            self.assertTrue(output.parent.is_dir())
+
     def test_write_gate_is_enabled_by_default_and_can_be_disabled(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             self.assertTrue(paths.writes_allowed())
@@ -105,4 +135,3 @@ class ProjectPathValidationTests(unittest.TestCase):
             output = Path(root, "result.pdf")
             with self.assertRaisesRegex(RuntimeError, "需要配置绝对路径"):
                 paths.validate_output_in_export_root(str(output), "output_path")
-
