@@ -11,12 +11,69 @@ from __future__ import annotations
 import inspect
 import json
 import re
+from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
 from mcp.types import ToolAnnotations
 
-from arcgis_pro_mcp.redaction import redact_text_values, safe_error
+from arcgis_pro_mcp.redaction import redact_text, redact_text_values, safe_error
+
+_IN_STRUCTURED_TOOL: ContextVar[bool] = ContextVar(
+    "arcgis_pro_in_structured_tool",
+    default=False,
+)
+
+
+class _PreRedactedPayload:
+    """Internal marker carrying an already-redacted value for structured MCP calls."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+
+def is_in_structured_tool() -> bool:
+    """Return True while executing inside a structured MCP tool wrapper."""
+    return _IN_STRUCTURED_TOOL.get()
+
+
+def _coerce_json_leaves(value: Any) -> Any:
+    """Normalize non-JSON-native leaf values like ``json.dumps(..., default=str)``.
+
+    Strings, numbers, booleans, and ``None`` are returned untouched so already-redacted
+    strings never pay a second regex pass.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        changed = False
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            str_key = key if isinstance(key, str) else str(key)
+            new_item = _coerce_json_leaves(item)
+            if str_key is not key or new_item is not item:
+                changed = True
+            normalized[str_key] = new_item
+        return normalized if changed else value
+    if isinstance(value, list):
+        changed = False
+        items = []
+        for item in value:
+            new_item = _coerce_json_leaves(item)
+            if new_item is not item:
+                changed = True
+            items.append(new_item)
+        return items if changed else value
+    if isinstance(value, (tuple, set, frozenset)):
+        return [_coerce_json_leaves(item) for item in value]
+    return redact_text(value)
+
+
+def pre_redacted_payload(value: Any) -> _PreRedactedPayload:
+    """Wrap an already-redacted payload to bypass JSON round-trip and re-redaction."""
+    return _PreRedactedPayload(_coerce_json_leaves(value))
 
 _ACTION_LABELS = {
     "add": "添加",
@@ -480,7 +537,8 @@ def tool_policy(name: str) -> dict[str, Any]:
         part in name
         for part in (
             "active_view",
-            "window_",
+            "window_job_",
+            "window_wait_",
             "open_map_view",
             "open_layout_view",
             "open_report_view",
@@ -493,7 +551,10 @@ def tool_policy(name: str) -> dict[str, Any]:
             "delete_layer_selection",
             "set_active_view_camera",
         )
-    ) or name.startswith(
+    ) or name in {
+        "arcgis_pro_select_window",
+        "arcgis_pro_detach_window",
+    } or name.startswith(
         (
             "arcgis_pro_sdk_context",
             "arcgis_pro_sdk_set_",
@@ -507,6 +568,7 @@ def tool_policy(name: str) -> dict[str, Any]:
     )
     gates: list[str] = []
     no_write_gate = {
+        "arcgis_pro_select_window",
         "arcgis_pro_sdk_acquire_project_lease",
         "arcgis_pro_sdk_release_project_lease",
         "arcgis_pro_sdk_renew_project_lease",
@@ -684,6 +746,13 @@ def tool_policy(name: str) -> dict[str, Any]:
 
 
 def _coerce_structured_result(value: Any) -> dict[str, Any]:
+    if isinstance(value, _PreRedactedPayload):
+        payload = value.value
+        if isinstance(payload, dict):
+            return payload
+        if payload is None:
+            return {"ok": True}
+        return {"ok": True, "result": payload}
     if isinstance(value, dict):
         return redact_text_values(value)
     if isinstance(value, str):
@@ -700,22 +769,30 @@ def _coerce_structured_result(value: Any) -> dict[str, Any]:
 
 
 def _structured_callable(fn: Any) -> Any:
+    if getattr(fn, "__arcgis_structured_output__", False):
+        return fn
     if inspect.iscoroutinefunction(fn):
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            token = _IN_STRUCTURED_TOOL.set(True)
             try:
                 return _coerce_structured_result(await fn(*args, **kwargs))
             except Exception as exc:
                 raise RuntimeError(safe_error(exc, 2000)) from exc
+            finally:
+                _IN_STRUCTURED_TOOL.reset(token)
 
         wrapper: Any = async_wrapper
     else:
         @wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            token = _IN_STRUCTURED_TOOL.set(True)
             try:
                 return _coerce_structured_result(fn(*args, **kwargs))
             except Exception as exc:
                 raise RuntimeError(safe_error(exc, 2000)) from exc
+            finally:
+                _IN_STRUCTURED_TOOL.reset(token)
 
         wrapper = sync_wrapper
 
@@ -728,30 +805,139 @@ def _structured_callable(fn: Any) -> Any:
     except (TypeError, ValueError):
         pass
     wrapper.__arcgis_structured_output__ = True
+    wrapper.__arcgis_raw_fn__ = fn
     return wrapper
 
 
+def _build_tool_metadata(
+    name: str,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    annotations: Any = None,
+    meta: dict[str, Any] | None = None,
+) -> tuple[str, str, ToolAnnotations, dict[str, Any]]:
+    policy = tool_policy(name)
+    resolved_description = (description or "").strip() or generated_description(name)
+    resolved_title = title or name.removeprefix("arcgis_pro_").replace("_", " ").title()
+    resolved_annotations = annotations or ToolAnnotations(
+        title=resolved_title,
+        readOnlyHint=policy["read_only"],
+        destructiveHint=policy["destructive"],
+        idempotentHint=policy["idempotent"],
+        openWorldHint=policy["open_world"],
+    )
+    resolved_meta = dict(meta or {})
+    resolved_meta["arcgisPro"] = {
+        "requiresCurrent": policy["requires_current"],
+        "requiresSdkBridge": policy["requires_sdk_bridge"],
+        "gates": policy["gates"],
+    }
+    return resolved_title, resolved_description, resolved_annotations, resolved_meta
+
+
+def _is_tool_finalized(tool: Any) -> bool:
+    fn = getattr(tool, "fn", None)
+    if not getattr(fn, "__arcgis_structured_output__", False):
+        return False
+    meta = getattr(tool, "meta", None)
+    if not isinstance(meta, dict) or not isinstance(meta.get("arcgisPro"), dict):
+        return False
+    if getattr(tool, "annotations", None) is None:
+        return False
+    if not (getattr(tool, "title", None) or "").strip():
+        return False
+    if not (getattr(tool, "description", None) or "").strip():
+        return False
+    return True
+
+
+def register_structured_tool(
+    mcp: Any,
+    fn: Any,
+    *,
+    name: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    annotations: Any = None,
+    icons: Any = None,
+    meta: dict[str, Any] | None = None,
+) -> Any:
+    """Register a tool in a single pass with structured output and policy metadata.
+
+    Returns the original ``fn`` unchanged so direct Python callers keep the
+    historical JSON-string return contract while MCP clients invoke the
+    structured wrapper without a second Pydantic schema build.
+    """
+    tool_name = (name or getattr(fn, "__name__", "")).strip()
+    if not tool_name:
+        raise ValueError("Tool name cannot be empty")
+    raw_description = description if description is not None else getattr(fn, "__doc__", None)
+    resolved_title, resolved_description, resolved_annotations, resolved_meta = (
+        _build_tool_metadata(
+            tool_name,
+            title=title,
+            description=raw_description,
+            annotations=annotations,
+            meta=meta,
+        )
+    )
+    wrapper = _structured_callable(fn)
+    if hasattr(mcp, "add_tool"):
+        mcp.add_tool(
+            wrapper,
+            name=tool_name,
+            title=resolved_title,
+            description=resolved_description,
+            annotations=resolved_annotations,
+            icons=icons,
+            meta=resolved_meta,
+            structured_output=True,
+        )
+    else:
+        mcp.tool(
+            name=tool_name,
+            title=resolved_title,
+            description=resolved_description,
+            annotations=resolved_annotations,
+            icons=icons,
+            meta=resolved_meta,
+            structured_output=True,
+        )(wrapper)
+        manager = getattr(mcp, "_tool_manager", None)
+        if manager is not None and hasattr(manager, "get_tool"):
+            registered = manager.get_tool(tool_name)
+            if registered is not None and not _is_tool_finalized(registered):
+                manager._tools[tool_name] = type(registered).from_function(
+                    wrapper,
+                    name=tool_name,
+                    title=resolved_title,
+                    description=resolved_description,
+                    annotations=resolved_annotations,
+                    icons=icons,
+                    meta=resolved_meta,
+                    structured_output=True,
+                )
+    return fn
+
+
 def finalize_tool_registry(mcp: Any) -> None:
-    """Upgrade every registered tool without changing direct Python call behavior."""
+    """Upgrade every registered tool without changing direct Python call behavior.
+
+    Idempotent: tools already registered via ``register_structured_tool`` are
+    skipped with zero Pydantic schema rebuilds.
+    """
     manager = mcp._tool_manager
     for old in list(manager.list_tools()):
+        if _is_tool_finalized(old):
+            continue
         name = old.name
-        policy = tool_policy(name)
-        description = (old.description or "").strip() or generated_description(name)
-        title = old.title or name.removeprefix("arcgis_pro_").replace("_", " ").title()
-        annotations = ToolAnnotations(
-            title=title,
-            readOnlyHint=policy["read_only"],
-            destructiveHint=policy["destructive"],
-            idempotentHint=policy["idempotent"],
-            openWorldHint=policy["open_world"],
+        title, description, annotations, meta = _build_tool_metadata(
+            name,
+            title=old.title,
+            description=old.description,
+            meta=old.meta,
         )
-        meta = dict(old.meta or {})
-        meta["arcgisPro"] = {
-            "requiresCurrent": policy["requires_current"],
-            "requiresSdkBridge": policy["requires_sdk_bridge"],
-            "gates": policy["gates"],
-        }
         wrapper = _structured_callable(old.fn)
         replacement = type(old).from_function(
             wrapper,

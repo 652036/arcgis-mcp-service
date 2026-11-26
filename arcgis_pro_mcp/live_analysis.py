@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -14,6 +15,8 @@ from arcgis_pro_mcp.paths import (
 )
 from arcgis_pro_mcp.redaction import redact_text
 
+_MAX_CELL = 2000
+
 # Exact ArcPy tools already represented by semantic wrappers in this project.  The
 # live command accepts their ArcPy names so current Layer objects and their selection
 # sets can be used without weakening the generic-GP gate.
@@ -21,27 +24,28 @@ CURRENT_NAMED_GP_TOOLS = frozenset(
     {
         "analysis.Buffer",
         "analysis.Clip",
-        "analysis.Dissolve",
         "analysis.Erase",
+        "analysis.GenerateNearTable",
         "analysis.Identity",
         "analysis.Intersect",
         "analysis.MultipleRingBuffer",
         "analysis.Select",
         "analysis.SpatialJoin",
+        "analysis.Statistics",
         "analysis.SymDiff",
         "analysis.Union",
+        "cartography.AggregatePolygons",
         "conversion.ExportFeatures",
         "conversion.ExportTable",
         "conversion.FeatureToRaster",
         "conversion.JSONToFeatures",
         "conversion.PolygonToRaster",
         "conversion.RasterToPolygon",
-        "management.AggregatePolygons",
         "management.CheckGeometry",
         "management.CopyFeatures",
+        "management.Dissolve",
         "management.FeatureToLine",
         "management.FeatureToPoint",
-        "management.GenerateNearTable",
         "management.Merge",
         "management.MinimumBoundingGeometry",
         "management.MultipartToSinglepart",
@@ -49,7 +53,6 @@ CURRENT_NAMED_GP_TOOLS = frozenset(
         "management.PolygonToLine",
         "management.Project",
         "management.Resample",
-        "management.Statistics",
     }
 )
 
@@ -345,6 +348,32 @@ def run_current_analysis(
     }
 
 
+def _bounded_cell(value: Any) -> tuple[Any, bool]:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value, False
+    if isinstance(value, str):
+        if len(value) <= _MAX_CELL:
+            return value, False
+        return value[:_MAX_CELL] + "…", True
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        if len(value) > _MAX_CELL:
+            text = bytes(value[:_MAX_CELL]).hex()
+            return text[:_MAX_CELL] + "…", True
+        text = bytes(value).hex()
+        if len(text) <= _MAX_CELL:
+            return text, False
+        return text[:_MAX_CELL] + "…", True
+    if isinstance(value, (list, tuple, dict)):
+        serialized = json.dumps(value, ensure_ascii=False, default=str)
+        if len(serialized) <= _MAX_CELL:
+            return value, False
+        return serialized[:_MAX_CELL] + "…", True
+    text = str(value)
+    if len(text) <= _MAX_CELL:
+        return text, False
+    return text[:_MAX_CELL] + "…", True
+
+
 def query_current_layer(
     arcpy: Any,
     map_obj: Any,
@@ -388,16 +417,23 @@ def query_current_layer(
             "rows": [],
             "row_count": 0,
             "truncated": False,
+            "cell_truncated": False,
         }
     source = layer if selected_only else getattr(layer, "dataSource", layer)
     rows: list[dict[str, Any]] = []
     truncated = False
+    cell_truncated = False
     with arcpy.da.SearchCursor(source, requested, where or None) as cursor:
         for row in cursor:
             if len(rows) >= cap:
                 truncated = True
                 break
-            rows.append({requested[index]: value for index, value in enumerate(row)})
+            item: dict[str, Any] = {}
+            for index, value in enumerate(row):
+                bounded, was_truncated = _bounded_cell(value)
+                cell_truncated = cell_truncated or was_truncated
+                item[requested[index]] = bounded
+            rows.append(item)
     return {
         "ok": True,
         "map_name": str(getattr(map_obj, "name", "")),
@@ -409,4 +445,5 @@ def query_current_layer(
         "rows": rows,
         "row_count": len(rows),
         "truncated": truncated,
+        "cell_truncated": cell_truncated,
     }

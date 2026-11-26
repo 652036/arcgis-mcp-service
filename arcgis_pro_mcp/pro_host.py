@@ -41,6 +41,7 @@ from arcgis_pro_mcp.private_state import (  # noqa: E402
 )
 from arcgis_pro_mcp.pro_attach import (  # noqa: E402
     DEFAULT_PORT,
+    ENV_BOUND_PORT,
     ENV_IN_HOST,
     FORWARDED_ENV_KEYS,
     HOST_JOB_TIMEOUT,
@@ -48,6 +49,7 @@ from arcgis_pro_mcp.pro_attach import (  # noqa: E402
     SERVICE_NAME,
     TOKEN_HEADER,
     configured_host_port,
+    prune_stale_state_files,
     state_path,
 )
 from arcgis_pro_mcp.pro_attach import ENV_PORT as ENV_PORT  # noqa: E402
@@ -59,6 +61,7 @@ JOB_RETENTION_SECONDS = 3600
 MAX_RETAINED_JOBS = 256
 _MISSING = object()
 _LIVE_LOCK = threading.Lock()
+_LIVE_COND = threading.Condition(_LIVE_LOCK)
 _LIVE: dict[str, Any] = {
     "project": None,
     "pid": os.getpid(),
@@ -133,7 +136,7 @@ class _ExclusiveThreadingHTTPServer(ThreadingHTTPServer):
 
 def _candidate_ports() -> list[int]:
     configured_port = configured_host_port()
-    return [configured_port or DEFAULT_PORT]
+    return [configured_port] if configured_port is not None else [DEFAULT_PORT, 0]
 
 
 def _restore_env_value(name: str, previous: object) -> None:
@@ -231,7 +234,7 @@ def _refresh_live_context() -> None:
     try:
         project, project_path = _current_project()
         active_view = _active_view_snapshot(project)
-        with _LIVE_LOCK:
+        with _LIVE_COND:
             before = (
                 _LIVE.get("project"),
                 _LIVE.get("project_is_read_only"),
@@ -250,8 +253,9 @@ def _refresh_live_context() -> None:
             if before != after:
                 _LIVE["context_revision"] = int(_LIVE.get("context_revision", 0)) + 1
                 _LIVE["last_context_change_at"] = time.time()
+                _LIVE_COND.notify_all()
     except Exception as exc:  # noqa: BLE001
-        with _LIVE_LOCK:
+        with _LIVE_COND:
             before = (
                 _LIVE.get("project"),
                 _LIVE.get("project_is_read_only"),
@@ -268,6 +272,7 @@ def _refresh_live_context() -> None:
             if before != after:
                 _LIVE["context_revision"] = int(_LIVE.get("context_revision", 0)) + 1
                 _LIVE["last_context_change_at"] = time.time()
+                _LIVE_COND.notify_all()
 
 
 @contextmanager
@@ -434,6 +439,9 @@ class _Job:
             return data
 
 
+_PUBLISHED_STATE_PATHS: dict[str, tuple[Path, Path]] = {}
+
+
 def _write_state(port: int, project: str, session_id: str, token: str, started_at: float) -> None:
     data = {
         "ok": True,
@@ -447,11 +455,19 @@ def _write_state(port: int, project: str, session_id: str, token: str, started_a
         "token": token,
         "started_at": started_at,
     }
-    write_private_json(Path(state_path()), data, temp_tag=session_id)
+    if not session_id or len(session_id) > 64 or any(not (c.isascii() and (c.isalnum() or c in "_-")) for c in session_id):
+        raise RuntimeError("窗口宿主 session_id 无效")
+    compatibility_path = Path(state_path(port))
+    instance_path = compatibility_path.with_name(f"arcgis-pro-mcp-instance-{os.getpid()}-{session_id}.json")
+    _PUBLISHED_STATE_PATHS[session_id] = (compatibility_path, instance_path)
+    write_private_json(instance_path, data, temp_tag=session_id)
+    write_private_json(compatibility_path, data, temp_tag=session_id)
 
 
 def _clear_state(session_id: str) -> None:
-    remove_private_json_if(Path(state_path()), "session_id", session_id)
+    paths = _PUBLISHED_STATE_PATHS.pop(session_id, (Path(state_path()),))
+    for path in paths:
+        remove_private_json_if(path, "session_id", session_id)
 
 
 def _public_status(jobs: queue.Queue[_Job]) -> dict[str, Any]:
@@ -647,13 +663,16 @@ def _run_host_main() -> None:
                     self._send(400, {"ok": False, "error": "invalid event query"})
                     return
                 deadline = time.monotonic() + timeout_ms / 1000
-                while True:
-                    with _LIVE_LOCK:
+                with _LIVE_COND:
+                    while True:
                         revision = int(_LIVE.get("context_revision", 0))
-                        snapshot = dict(_LIVE)
-                    if revision > after_revision or stop.is_set() or time.monotonic() >= deadline:
-                        break
-                    time.sleep(0.1)
+                        if revision > after_revision or stop.is_set():
+                            break
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        _LIVE_COND.wait(timeout=remaining)
+                    snapshot = dict(_LIVE)
                 self._send(
                     200,
                     {
@@ -679,11 +698,12 @@ def _run_host_main() -> None:
             if route == "/stop":
                 with admission_lock:
                     stop.set()
-                    with _LIVE_LOCK:
+                    with _LIVE_COND:
                         _LIVE["state"] = "STOPPING"
                         _LIVE["ready"] = False
                         busy = bool(_LIVE.get("busy"))
                         active_request_id = _LIVE.get("active_request_id")
+                        _LIVE_COND.notify_all()
                 self._send(
                     200,
                     {
@@ -856,6 +876,7 @@ def _run_host_main() -> None:
     thread: threading.Thread | None = None
     try:
         port = int(httpd.server_address[1])
+        os.environ[ENV_BOUND_PORT] = str(port)
         httpd.daemon_threads = True
         thread = threading.Thread(
             target=httpd.serve_forever,
@@ -863,6 +884,10 @@ def _run_host_main() -> None:
             daemon=True,
         )
         thread.start()
+        try:
+            prune_stale_state_files(directory=Path(state_path(port)).parent)
+        except Exception:  # noqa: BLE001
+            pass
         _write_state(port, project_path, session_id, token, started_at)
         _write_console(
             "\n已接入 ArcGIS Pro 当前窗口\n"
@@ -870,7 +895,8 @@ def _run_host_main() -> None:
             f"地址：http://127.0.0.1:{port}\n"
             f"会话：{session_id}\n"
             "安全策略：每次调用沿用 MCP 客户端配置；宿主不再强制开启写入或硬编码输出目录。\n"
-            "请保持本 Python 窗口不要关闭。只有 aprx_path=CURRENT 的工程调用会进入此窗口。\n"
+            "请保持本 Python 窗口不要关闭。每个 Pro 窗口均可运行本入口，端口冲突时自动分配。\n"
+            f"MCP 侧用 arcgis_pro_list_windows 列出窗口；本窗口可通过 CURRENT:{os.getpid()} 定位。\n"
             "结束：在此窗口按 Ctrl+C，或关闭本脚本。\n\n"
         )
     except BaseException:
@@ -1065,9 +1091,10 @@ def _run_host_main() -> None:
             active_job_accounted = True
             active_job = None
             jobs.task_done()
-        with _LIVE_LOCK:
+        with _LIVE_COND:
             _LIVE["state"] = "STOPPING"
             _LIVE["ready"] = False
+            _LIVE_COND.notify_all()
         httpd.shutdown()
         thread.join(timeout=2)
         while True:
@@ -1099,10 +1126,12 @@ def _run_host_main() -> None:
 def main() -> None:
     """Run the host while always restoring the caller's process marker."""
     previous_in_host = os.environ.get(ENV_IN_HOST, _MISSING)
+    previous_bound_port = os.environ.get(ENV_BOUND_PORT, _MISSING)
     try:
         _run_host_main()
     finally:
         _restore_env_value(ENV_IN_HOST, previous_in_host)
+        _restore_env_value(ENV_BOUND_PORT, previous_bound_port)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from arcgis_pro_mcp import sdk_bridge
+from arcgis_pro_mcp import private_state, sdk_bridge
+
+
+def _future_utc(seconds: int = 300) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
 
 
 class SdkBridgeClientTests(unittest.TestCase):
@@ -40,15 +48,20 @@ class SdkBridgeClientTests(unittest.TestCase):
         self.env.stop()
         self.temp.cleanup()
 
-    def _acquire(self) -> str:
+    def _acquire(
+        self,
+        *,
+        lease_id: str = "lease-secret",
+        expires_at_utc: str | None = None,
+    ) -> str:
         response = {
             "ok": True,
             "lease": {
-                "leaseId": "lease-secret",
+                "leaseId": lease_id,
                 "serverSessionId": "server-session",
                 "projectUri": self.project,
                 "generation": 7,
-                "expiresAtUtc": "2026-09-03T00:01:00Z",
+                "expiresAtUtc": expires_at_utc or _future_utc(300),
             },
         }
         with (
@@ -56,7 +69,7 @@ class SdkBridgeClientTests(unittest.TestCase):
             patch.object(sdk_bridge, "_request", return_value=response),
         ):
             result = sdk_bridge.acquire_lease(self.project, process_id=42)
-        self.assertNotIn("lease-secret", str(result))
+        self.assertNotIn(lease_id, str(result))
         self.assertNotIn("bearer-secret", str(result))
         self.assertEqual(result["lease_generation"], 7)
         return result["sdk_session_ref"]
@@ -267,6 +280,85 @@ class SdkBridgeClientTests(unittest.TestCase):
                     confirm=True,
                 )
         request.assert_not_called()
+
+    def test_discovery_enforces_private_acl_and_rejects_reparse_points(self) -> None:
+        workspace = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(dir=workspace) as local_app_data:
+            bridge_dir = Path(local_app_data) / "ArcGISProMcp" / "sdk-bridge"
+            trusted_path = bridge_dir / "bridge-42.json"
+            document = {
+                "protocolVersion": "1",
+                "processId": 42,
+                "port": 51234,
+                "token": "bridge-secret-token",
+                "serverSessionId": "session-42",
+                "createdAtUtc": _future_utc(0),
+            }
+            private_state.write_private_json(trusted_path, document, temp_tag="bridge42")
+            with patch.dict(os.environ, {"LOCALAPPDATA": local_app_data}, clear=False):
+                discovered = sdk_bridge._discoveries()
+                self.assertEqual(len(discovered), 1)
+                self.assertEqual(discovered[0].process_id, 42)
+                self.assertEqual(discovered[0].port, 51234)
+
+                # Reparse point / junction on discovery directory must fail closed.
+                with patch.object(sdk_bridge, "is_reparse_or_link", return_value=True):
+                    self.assertEqual(sdk_bridge._discoveries(), [])
+
+        # Plain temp directory/file without private ACL must fail closed.
+        with tempfile.TemporaryDirectory(dir=workspace) as untrusted_root:
+            untrusted_dir = Path(untrusted_root) / "ArcGISProMcp" / "sdk-bridge"
+            untrusted_dir.mkdir(parents=True, exist_ok=True)
+            untrusted_file = untrusted_dir / "bridge-99.json"
+            untrusted_file.write_text(
+                json.dumps(
+                    {
+                        "protocolVersion": "1",
+                        "processId": 99,
+                        "port": 51235,
+                        "token": "untrusted-token",
+                        "serverSessionId": "session-99",
+                        "createdAtUtc": _future_utc(0),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "私有权限"):
+                sdk_bridge._load_discovery(untrusted_file)
+            with patch.dict(os.environ, {"LOCALAPPDATA": untrusted_root}, clear=False):
+                self.assertEqual(sdk_bridge._discoveries(), [])
+
+    def test_sessions_auto_prune_expired_leases(self) -> None:
+        expired_ref = self._acquire(
+            lease_id="lease-expired",
+            expires_at_utc="2020-01-01T00:00:00Z",
+        )
+        with self.assertRaisesRegex(RuntimeError, "sdk_session_ref"):
+            sdk_bridge._session(expired_ref)
+
+        active_ref = self._acquire(lease_id="lease-active")
+        with sdk_bridge._SESSIONS_LOCK:
+            sdk_bridge._SESSIONS[active_ref].expires_at_monotonic = 0.0
+        with patch.object(sdk_bridge, "_discoveries", return_value=[]):
+            status = sdk_bridge.bridge_status()
+        self.assertEqual(status["active_sdk_session_count"], 0)
+        with self.assertRaisesRegex(RuntimeError, "sdk_session_ref"):
+            sdk_bridge._session(active_ref)
+
+    def test_sessions_evict_least_recently_used_above_max_limit(self) -> None:
+        with patch.object(sdk_bridge, "_MAX_LOCAL_SESSIONS", 2):
+            ref1 = self._acquire(lease_id="lease-1")
+            ref2 = self._acquire(lease_id="lease-2")
+            # Touch ref1 so ref2 becomes least recently used.
+            self.assertEqual(sdk_bridge._session(ref1).lease_id, "lease-1")
+            ref3 = self._acquire(lease_id="lease-3")
+
+            self.assertEqual(sdk_bridge._session(ref1).lease_id, "lease-1")
+            self.assertEqual(sdk_bridge._session(ref3).lease_id, "lease-3")
+            with self.assertRaisesRegex(RuntimeError, "sdk_session_ref"):
+                sdk_bridge._session(ref2)
+            with sdk_bridge._SESSIONS_LOCK:
+                self.assertEqual(len(sdk_bridge._SESSIONS), 2)
 
 
 if __name__ == "__main__":

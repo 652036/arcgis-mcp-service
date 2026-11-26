@@ -55,8 +55,9 @@ def _request_json(
         headers=headers,
         method=method,
     )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             status = int(response.status)
             body = response.read()
     except urllib.error.HTTPError as exc:
@@ -455,6 +456,46 @@ class ProHostJobProtocolTests(unittest.TestCase):
                     {"aprx_path": host.project_path},
                     host_snapshot=health,
                 )
+
+    def test_event_long_poll_wakes_immediately_on_stop(self) -> None:
+        def invoke_tool(*args: Any, **kwargs: Any) -> str:
+            del args, kwargs
+            return "{}"
+
+        with _running_host(invoke_tool) as host:
+            status, health = _request_json(host.base, "/health", token=host.token)
+            self.assertEqual(status, 200)
+            revision = int(health["context_revision"])
+            poll_result: list[tuple[int, dict[str, Any]]] = []
+            poll_errors: list[BaseException] = []
+
+            def wait_events() -> None:
+                try:
+                    poll_result.append(
+                        _request_json(
+                            host.base,
+                            f"/events?after_revision={revision}&timeout_ms=10000",
+                            token=host.token,
+                            timeout=5.0,
+                        )
+                    )
+                except BaseException as exc:  # noqa: BLE001
+                    poll_errors.append(exc)
+
+            waiter = threading.Thread(target=wait_events, daemon=True)
+            waiter.start()
+            time.sleep(0.05)
+            started = time.monotonic()
+            stop_status, stop_body = _request_json(host.base, "/stop", token=host.token, payload={})
+            self.assertEqual(stop_status, 200)
+            self.assertTrue(stop_body["stopping"])
+            waiter.join(timeout=2.0)
+            elapsed = time.monotonic() - started
+            self.assertFalse(waiter.is_alive())
+            self.assertLess(elapsed, 1.5)
+            self.assertEqual(poll_errors, [])
+            self.assertEqual(poll_result[0][0], 200)
+            self.assertFalse(poll_result[0][1]["changed"])
 
 
 if __name__ == "__main__":

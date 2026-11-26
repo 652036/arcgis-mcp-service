@@ -9,8 +9,11 @@ portal or an allowlisted ``.ags`` connection owns authentication.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import xml.etree.ElementTree as ET
+import zipfile
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -34,6 +37,30 @@ _SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
 _INLINE_SECRET_RE = re.compile(
     r"(?i)(?:password|passwd|pwd|secret|access[_-]?token|token)\s*[:=]\s*[^\s,;]+"
 )
+_URL_CANDIDATE_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+")
+_INLINE_URL_CRED_RE = re.compile(
+    r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/\"'<>]+@[^\s/\"'<>]+"
+)
+_MAX_SDDRAFT_BYTES = 16 * 1024 * 1024
+_MAX_SD_MEMBER_BYTES = 5 * 1024 * 1024
+_MAX_SD_INSPECT_ENTRIES = 256
+_OVERWRITE_KEYS = frozenset(
+    {"overwriteexistingservice", "overwrite", "replaceexistingservice", "replaceservice"}
+)
+_PUBLIC_KEYS = frozenset(
+    {"packageispublic", "ispublic", "sharewitheveryone", "shareeveryone", "public", "in_public"}
+)
+_ORG_KEYS = frozenset(
+    {
+        "packageundermyorg",
+        "sharewithorg",
+        "shareorganization",
+        "organization",
+        "in_organization",
+        "isorganization",
+    }
+)
+_SHARING_LEVEL_KEYS = frozenset({"sharinglevel", "sharelevel"})
 
 _WEB_LAYER_COMBINATIONS = {
     "HOSTING_SERVER": {"FEATURE", "TILE", "VECTOR_TILE", "SCENE_LAYER"},
@@ -158,11 +185,218 @@ def _reject_inline_secret(label: str, value: str) -> str:
     text = str(value or "")
     if _INLINE_SECRET_RE.search(text):
         raise RuntimeError(f"{label} 禁止包含密码、secret 或 token")
-    if "://" in text:
-        parsed = urlsplit(text)
+    for match in _URL_CANDIDATE_RE.finditer(text):
+        candidate = match.group(0)
+        try:
+            parsed = urlsplit(candidate)
+        except ValueError:
+            if _INLINE_URL_CRED_RE.match(candidate):
+                raise RuntimeError(f"{label} 禁止包含 URL 内联凭据") from None
+            continue
         if parsed.username or parsed.password:
             raise RuntimeError(f"{label} 禁止包含 URL 内联凭据")
     return text
+
+
+def _local_xml_name(tag: str) -> str:
+    if "}" in tag:
+        return tag.rsplit("}", 1)[1].lower()
+    return tag.lower()
+
+
+def _is_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"true", "1", "yes"}
+
+
+def _inspect_xml_bytes(raw: bytes, label: str) -> dict[str, bool]:
+    ascii_probe = raw.replace(b"\x00", b"").lower()
+    if b"<!doctype" in ascii_probe or b"<!entity" in ascii_probe:
+        raise RuntimeError(f"{label} 禁止包含 XML DOCTYPE 或 ENTITY 声明")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        raise RuntimeError(f"{label} 不是有效的 XML 文档，拒绝继续") from exc
+
+    detected = {"overwrite": False, "public": False, "organization": False}
+
+    def _apply_key_value(key: str, raw_value: str) -> None:
+        val = raw_value.strip().lower()
+        if key in _OVERWRITE_KEYS:
+            if _is_truthy(val):
+                detected["overwrite"] = True
+        elif key in _PUBLIC_KEYS:
+            if _is_truthy(val) or val in {"public", "everyone"}:
+                detected["public"] = True
+        elif key in _ORG_KEYS:
+            if _is_truthy(val) or val in {"share_organization", "organization"}:
+                detected["organization"] = True
+        elif key in _SHARING_LEVEL_KEYS:
+            if val in {"everyone", "public"}:
+                detected["public"] = True
+            elif val in {"organization", "org"}:
+                detected["organization"] = True
+        elif key == "type" and "esriservicedefinitiontype_replacement" in val:
+            detected["overwrite"] = True
+
+    for elem in root.iter():
+        tag = _local_xml_name(elem.tag)
+        text = (elem.text or "").strip()
+        if tag == "type" and "esriservicedefinitiontype_replacement" in text.lower():
+            detected["overwrite"] = True
+        elif tag in _OVERWRITE_KEYS or tag in _PUBLIC_KEYS or tag in _ORG_KEYS or tag in _SHARING_LEVEL_KEYS:
+            _apply_key_value(tag, text)
+        elif tag == "propertysetproperty":
+            prop_key = ""
+            prop_val = ""
+            for child in elem:
+                child_tag = _local_xml_name(child.tag)
+                if child_tag == "key":
+                    prop_key = (child.text or "").strip().lower()
+                elif child_tag == "value":
+                    prop_val = (child.text or "").strip()
+            if prop_key:
+                _apply_key_value(prop_key, prop_val)
+
+        for attr_name, attr_value in elem.attrib.items():
+            attr_local = _local_xml_name(attr_name)
+            if attr_local in _OVERWRITE_KEYS or attr_local in _PUBLIC_KEYS or attr_local in _ORG_KEYS or attr_local in _SHARING_LEVEL_KEYS:
+                _apply_key_value(attr_local, attr_value)
+
+    return detected
+
+
+def _inspect_json_payload(payload: Any, detected: dict[str, bool]) -> None:
+    if isinstance(payload, dict):
+        for raw_key, value in payload.items():
+            key = str(raw_key).strip().lower()
+            if isinstance(value, (dict, list)):
+                _inspect_json_payload(value, detected)
+                continue
+            val = str(value).strip().lower() if value is not None else ""
+            if key in _OVERWRITE_KEYS and _is_truthy(value):
+                detected["overwrite"] = True
+            elif key in _PUBLIC_KEYS and (_is_truthy(value) or val in {"public", "everyone"}):
+                detected["public"] = True
+            elif key in _ORG_KEYS and (
+                _is_truthy(value) or val in {"share_organization", "organization"}
+            ):
+                detected["organization"] = True
+            elif key in _SHARING_LEVEL_KEYS:
+                if val in {"everyone", "public"}:
+                    detected["public"] = True
+                elif val in {"organization", "org"}:
+                    detected["organization"] = True
+            elif key == "type" and "esriservicedefinitiontype_replacement" in val:
+                detected["overwrite"] = True
+    elif isinstance(payload, list):
+        for item in payload:
+            _inspect_json_payload(item, detected)
+
+
+def _enforce_artifact_policy(
+    detected: dict[str, bool],
+    *,
+    sharing_level: str,
+    overwrite_existing_service: bool,
+    artifact_kind: str,
+) -> None:
+    if detected["overwrite"]:
+        require_allow_publish_overwrite()
+        if not overwrite_existing_service:
+            raise RuntimeError(
+                f"{artifact_kind} 内嵌覆盖/替换现有服务配置，但未声明 overwrite_existing_service=True"
+            )
+    if detected["public"]:
+        require_allow_public_share()
+        if sharing_level != "EVERYONE":
+            raise RuntimeError(
+                f"{artifact_kind} 内嵌公开共享（EVERYONE）配置，与声明的 sharing_level={sharing_level} 冲突"
+            )
+    if detected["organization"] and sharing_level == "OWNER":
+        raise RuntimeError(
+            f"{artifact_kind} 内嵌组织共享（ORGANIZATION）配置，与声明的 sharing_level=OWNER 冲突"
+        )
+
+
+def _validate_sddraft_policy(
+    sddraft_path: str,
+    *,
+    sharing_level: str,
+    overwrite_existing_service: bool,
+) -> dict[str, bool]:
+    size = os.path.getsize(sddraft_path)
+    if size > _MAX_SDDRAFT_BYTES:
+        raise RuntimeError(f"sddraft 文件超过安全大小上限（{_MAX_SDDRAFT_BYTES} 字节），拒绝打包")
+    with open(sddraft_path, "rb") as handle:
+        raw = handle.read(_MAX_SDDRAFT_BYTES + 1)
+    detected = _inspect_xml_bytes(raw, "sddraft")
+    _enforce_artifact_policy(
+        detected,
+        sharing_level=sharing_level,
+        overwrite_existing_service=overwrite_existing_service,
+        artifact_kind="sddraft",
+    )
+    return detected
+
+
+def _validate_sd_policy(
+    sd_path: str,
+    *,
+    sharing_level: str,
+    overwrite_existing_service: bool,
+) -> dict[str, bool]:
+    detected = {"overwrite": False, "public": False, "organization": False}
+    with open(sd_path, "rb") as handle:
+        prefix = handle.read(64)
+    if zipfile.is_zipfile(sd_path):
+        try:
+            with zipfile.ZipFile(sd_path, "r") as archive:
+                infos = archive.infolist()
+                if len(infos) > _MAX_SD_INSPECT_ENTRIES:
+                    raise RuntimeError("sd 压缩包条目数量超过安全上限，拒绝发布")
+                for info in infos:
+                    if info.is_dir():
+                        continue
+                    lower_name = info.filename.lower()
+                    if not lower_name.endswith((".sddraft", ".xml", ".json")):
+                        continue
+                    if info.file_size > _MAX_SD_MEMBER_BYTES:
+                        raise RuntimeError(
+                            f"sd 内部清单 {info.filename} 超过安全大小上限，拒绝发布"
+                        )
+                    member_bytes = archive.read(info.filename)
+                    if lower_name.endswith((".sddraft", ".xml")):
+                        sub = _inspect_xml_bytes(member_bytes, f"sd:{info.filename}")
+                        for key in detected:
+                            detected[key] = detected[key] or sub[key]
+                    else:
+                        try:
+                            payload = json.loads(member_bytes.decode("utf-8-sig"))
+                        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                            raise RuntimeError(
+                                f"sd 内部 JSON 清单 {info.filename} 无法解析，拒绝发布"
+                            ) from exc
+                        _inspect_json_payload(payload, detected)
+        except zipfile.BadZipFile as exc:
+            raise RuntimeError("sd 压缩包已损坏，拒绝发布") from exc
+    elif prefix.startswith(b"PK\x03\x04"):
+        raise RuntimeError("sd 压缩包已损坏，拒绝发布")
+    elif prefix.lstrip().startswith(b"<"):
+        with open(sd_path, "rb") as handle:
+            raw = handle.read(_MAX_SDDRAFT_BYTES + 1)
+        if len(raw) > _MAX_SDDRAFT_BYTES:
+            raise RuntimeError("sd XML 内容超过安全大小上限，拒绝发布")
+        detected = _inspect_xml_bytes(raw, "sd")
+
+    _enforce_artifact_policy(
+        detected,
+        sharing_level=sharing_level,
+        overwrite_existing_service=overwrite_existing_service,
+        artifact_kind="sd",
+    )
+    return detected
 
 
 def artifact_digest(path: str) -> dict[str, Any]:
@@ -462,6 +696,11 @@ def stage_service_definition(
         require_allow_publish_overwrite()
     source = _publishing_artifact(sddraft_path, "sddraft_path", ".sddraft", must_exist=True)
     source_identity = _require_digest(source, expected_sha256)
+    _validate_sddraft_policy(
+        source,
+        sharing_level=level,
+        overwrite_existing_service=bool(overwrite_existing_service),
+    )
     out = _publishing_artifact(output_sd_path, "output_sd_path", ".sd", must_exist=False)
     server_module = getattr(arcpy, "server", None)
     stage = getattr(server_module, "StageService", None)
@@ -520,11 +759,26 @@ def publish_service_definition(
     )
     source = _publishing_artifact(sd_path, "sd_path", ".sd", must_exist=True)
     identity = _require_digest(source, expected_sha256)
+    _validate_sd_policy(
+        source,
+        sharing_level=level,
+        overwrite_existing_service=bool(overwrite_existing_service),
+    )
     server_module = getattr(arcpy, "server", None)
     upload = getattr(server_module, "UploadServiceDefinition", None)
     if not callable(upload):
         raise RuntimeError("当前 ArcPy 不支持 arcpy.server.UploadServiceDefinition")
-    result = upload(source, target["upload_target"])
+    in_public = "PUBLIC" if level == "EVERYONE" else "PRIVATE"
+    in_organization = (
+        "SHARE_ORGANIZATION" if level in {"ORGANIZATION", "EVERYONE"} else "NO_SHARE_ORGANIZATION"
+    )
+    result = upload(
+        source,
+        target["upload_target"],
+        in_override="OVERRIDE_DEFINITION",
+        in_public=in_public,
+        in_organization=in_organization,
+    )
     return {
         "published": True,
         "artifact": identity,

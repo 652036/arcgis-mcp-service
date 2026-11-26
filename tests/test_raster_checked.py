@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import os
+import sys
 import tempfile
 import unittest
 import uuid
 from contextlib import ExitStack
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from arcgis_pro_mcp import analysis_quality as qa
@@ -233,6 +235,46 @@ class CheckedRasterContractTests(unittest.TestCase):
         self.assertEqual(checked._file_version(renamed)[0], before)
         Path(str(renamed) + ".aux.xml").write_text("metadata", encoding="utf-8")
         self.assertNotEqual(checked._file_version(renamed)[0], before)
+
+
+class CheckedRasterBackendTests(unittest.TestCase):
+    def test_backend_explicitly_sets_gdal_exception_mode_when_available(self) -> None:
+        calls: list[str] = []
+        fake_gdal = SimpleNamespace(DontUseExceptions=lambda: calls.append("gdal"))
+        fake_ogr = SimpleNamespace(DontUseExceptions=lambda: calls.append("ogr"))
+        fake_osr = SimpleNamespace(DontUseExceptions=lambda: calls.append("osr"))
+        fake_osgeo = SimpleNamespace(gdal=fake_gdal, ogr=fake_ogr, osr=fake_osr)
+        fake_numpy = SimpleNamespace()
+        with patch.dict(
+            sys.modules,
+            {
+                "numpy": fake_numpy,
+                "osgeo": fake_osgeo,
+                "osgeo.gdal": fake_gdal,
+                "osgeo.ogr": fake_ogr,
+                "osgeo.osr": fake_osr,
+            },
+        ):
+            np_mod, gdal_mod, ogr_mod, osr_mod = checked._backend()
+        self.assertIs(np_mod, fake_numpy)
+        self.assertIs(gdal_mod, fake_gdal)
+        self.assertIs(ogr_mod, fake_ogr)
+        self.assertIs(osr_mod, fake_osr)
+        self.assertEqual(calls, ["gdal", "ogr", "osr"])
+
+        no_method = SimpleNamespace()
+        fake_osgeo_minimal = SimpleNamespace(gdal=no_method, ogr=no_method, osr=no_method)
+        with patch.dict(
+            sys.modules,
+            {
+                "numpy": fake_numpy,
+                "osgeo": fake_osgeo_minimal,
+                "osgeo.gdal": no_method,
+                "osgeo.ogr": no_method,
+                "osgeo.osr": no_method,
+            },
+        ):
+            checked._backend()
 
 
 if __name__ == "__main__":

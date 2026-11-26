@@ -3,11 +3,34 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from arcgis_pro_mcp import editing
+
+
+class InsertCursor:
+    def __init__(self, arcpy, dataset, fields):
+        self.arcpy = arcpy
+        self.dataset = dataset
+        self.fields = fields
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def insertRow(self, values):
+        rows = self.arcpy.rows[self.dataset]
+        next_oid = max((row["OID"] for row in rows), default=0) + 1
+        record = {"OID": next_oid}
+        for field, value in zip(self.fields, values, strict=True):
+            record[field] = value
+        rows.append(record)
+        return next_oid
 
 
 class Cursor:
@@ -65,6 +88,8 @@ class FakeEditor:
 
     def startOperation(self):
         self.calls.append(("startOperation",))
+        if self.arcpy.fail_start_operation:
+            raise RuntimeError("startOperation failed")
 
     def stopOperation(self):
         self.calls.append(("stopOperation",))
@@ -77,16 +102,20 @@ class FakeEditor:
 
 
 class FakeArcpy:
-    def __init__(self, workspace, datasets):
+    def __init__(self, workspace, datasets, *, fail_start_operation=False):
         self.workspace = workspace
         self.rows = datasets
         self.editors = []
+        self.fail_start_operation = fail_start_operation
         self.da = SimpleNamespace(
             SearchCursor=lambda dataset, fields, where=None: Cursor(
                 self, dataset, fields, where
             ),
             UpdateCursor=lambda dataset, fields, where=None: Cursor(
                 self, dataset, fields, where, True
+            ),
+            InsertCursor=lambda dataset, fields: InsertCursor(
+                self, dataset, fields
             ),
             Editor=lambda workspace: FakeEditor(self, workspace),
         )
@@ -215,6 +244,107 @@ class EditingTests(unittest.TestCase):
         self.assertGreater(result["total_affected"], 0)
         self.assertEqual(result["plan"][0]["kind"], "delete")
         self.assertIn("edit_token", result)
+
+    def test_edit_token_cannot_be_replayed_for_insert_or_update(self):
+        insert_ops = [{
+            "kind": "insert",
+            "fields": ["NAME"],
+            "rows": [["Inserted"]],
+        }]
+        insert_token = editing.edit_preflight(self.arcpy, self.first, insert_ops)["edit_token"]
+        first_result = editing.edit_apply(self.arcpy, self.first, insert_ops, insert_token)
+        self.assertTrue(first_result["committed"])
+        self.assertEqual(len(self.arcpy.rows[self.first]), 3)
+        self.assertEqual(len(self.arcpy.editors), 1)
+        with self.assertRaisesRegex(RuntimeError, "已被使用"):
+            editing.edit_apply(self.arcpy, self.first, insert_ops, insert_token)
+        self.assertEqual(len(self.arcpy.rows[self.first]), 3)
+        self.assertEqual(len(self.arcpy.editors), 1)
+
+        update_ops = [{
+            "kind": "update_geometry",
+            "geometry_token": "SHAPE@WKT",
+            "rows": [{"oid": 1, "geometry": "POINT (7 7)"}],
+        }]
+        update_token = editing.edit_preflight(self.arcpy, self.first, update_ops)["edit_token"]
+        editing.edit_apply(self.arcpy, self.first, update_ops, update_token)
+        with self.assertRaisesRegex(RuntimeError, "已被使用"):
+            editing.edit_apply(self.arcpy, self.first, update_ops, update_token)
+
+    def test_workspace_edit_token_cannot_be_replayed(self):
+        operations = [
+            {
+                "dataset_path": self.first,
+                "kind": "insert",
+                "fields": ["NAME"],
+                "rows": [["W1"]],
+            },
+            {
+                "dataset_path": self.second,
+                "kind": "insert",
+                "fields": ["NAME"],
+                "rows": [["W2"]],
+            },
+        ]
+        token = editing.workspace_edit_preflight(self.arcpy, operations)["edit_token"]
+        editing.workspace_edit_apply(self.arcpy, operations, token)
+        self.assertEqual(len(self.arcpy.editors), 1)
+        with self.assertRaisesRegex(RuntimeError, "已被使用"):
+            editing.workspace_edit_apply(self.arcpy, operations, token)
+        self.assertEqual(len(self.arcpy.editors), 1)
+        self.assertEqual(len(self.arcpy.rows[self.first]), 3)
+        self.assertEqual(len(self.arcpy.rows[self.second]), 2)
+
+    def test_consumed_token_nonces_are_pruned_after_expiry(self):
+        with editing._CONSUMED_TOKENS_LOCK:
+            editing._CONSUMED_TOKENS["expired-jti"] = time.time() - 10
+            editing._CONSUMED_TOKENS["active-jti"] = time.time() + 300
+        try:
+            self.assertFalse(editing._is_token_consumed("expired-jti", time.time()))
+            with editing._CONSUMED_TOKENS_LOCK:
+                self.assertNotIn("expired-jti", editing._CONSUMED_TOKENS)
+                self.assertIn("active-jti", editing._CONSUMED_TOKENS)
+        finally:
+            with editing._CONSUMED_TOKENS_LOCK:
+                editing._CONSUMED_TOKENS.pop("expired-jti", None)
+                editing._CONSUMED_TOKENS.pop("active-jti", None)
+
+    def test_start_operation_failure_stops_editing_without_saving(self):
+        self.arcpy.fail_start_operation = True
+        dataset_ops = [{
+            "kind": "update_geometry",
+            "geometry_token": "SHAPE@WKT",
+            "rows": [{"oid": 1, "geometry": "POINT (4 4)"}],
+        }]
+        token = editing.edit_preflight(self.arcpy, self.first, dataset_ops)["edit_token"]
+        with self.assertRaisesRegex(RuntimeError, "startOperation failed"):
+            editing.edit_apply(self.arcpy, self.first, dataset_ops, token)
+        self.assertEqual(
+            self.arcpy.editors[-1].calls,
+            [
+                ("startEditing", False, False),
+                ("startOperation",),
+                ("stopEditing", False),
+            ],
+        )
+
+        workspace_ops = [{
+            "dataset_path": self.first,
+            "kind": "update_geometry",
+            "geometry_token": "SHAPE@WKT",
+            "rows": [{"oid": 1, "geometry": "POINT (4 4)"}],
+        }]
+        ws_token = editing.workspace_edit_preflight(self.arcpy, workspace_ops)["edit_token"]
+        with self.assertRaisesRegex(RuntimeError, "startOperation failed"):
+            editing.workspace_edit_apply(self.arcpy, workspace_ops, ws_token)
+        self.assertEqual(
+            self.arcpy.editors[-1].calls,
+            [
+                ("startEditing", False, False),
+                ("startOperation",),
+                ("stopEditing", False),
+            ],
+        )
 
 
 if __name__ == "__main__":

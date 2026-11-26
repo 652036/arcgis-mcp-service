@@ -118,26 +118,30 @@ def run_reclassify(
         from arcgis_pro_mcp.raster_checked import _backend, _raster
         np, _gdal, _ogr, _osr = _backend()
         ds, meta = _raster(inf)
-        band = ds.GetRasterBand(1)
-        mask = band.GetMaskBand()
-        missing = 0
-        for row in range(0, ds.RasterYSize, 512):
-            for col in range(0, ds.RasterXSize, 512):
-                w, h = min(512, ds.RasterXSize-col), min(512, ds.RasterYSize-row)
-                data = band.ReadAsArray(col, row, w, h)
-                valid = mask.ReadAsArray(col, row, w, h)
-                if data is None or valid is None:
-                    raise RuntimeError("REMAP_INPUT_READ_FAILED")
-                valid = (valid != 0) & np.isfinite(data)
-                matched = np.zeros(data.shape, dtype=bool)
-                for start, end, _new in ordered:
-                    matched |= (data >= start) & (data <= end)
-                missing += int((valid & ~matched).sum())
-        ds = None
+        try:
+            if meta["scale"] != 1 or meta["offset"] != 0:
+                raise RuntimeError(
+                    "SCALED_RECLASS_INPUT_UNSUPPORTED: declare and materialize the value space first"
+                )
+            band = ds.GetRasterBand(1)
+            mask = band.GetMaskBand()
+            missing = 0
+            for row in range(0, ds.RasterYSize, 512):
+                for col in range(0, ds.RasterXSize, 512):
+                    w, h = min(512, ds.RasterXSize - col), min(512, ds.RasterYSize - row)
+                    data = band.ReadAsArray(col, row, w, h)
+                    valid = mask.ReadAsArray(col, row, w, h)
+                    if data is None or valid is None:
+                        raise RuntimeError("REMAP_INPUT_READ_FAILED")
+                    valid = (valid != 0) & np.isfinite(data)
+                    matched = np.zeros(data.shape, dtype=bool)
+                    for start, end, _new in ordered:
+                        matched |= (data >= start) & (data <= end)
+                    missing += int((valid & ~matched).sum())
+        finally:
+            ds = None
         if missing:
             raise RuntimeError(f"UNMAPPED_INPUT_VALUES: {missing} valid cells have no mapping")
-        if meta["scale"] != 1 or meta["offset"] != 0:
-            raise RuntimeError("SCALED_RECLASS_INPUT_UNSUPPORTED: declare and materialize the value space first")
     exists = getattr(arcpy, "Exists", None)
     if os.path.lexists(out) or (callable(exists) and exists(out)):
         raise RuntimeError("OUTPUT_ALREADY_EXISTS")

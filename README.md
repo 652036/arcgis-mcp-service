@@ -19,7 +19,7 @@ Each mode serves a distinct purpose. Requests never silently fall back to anothe
 | Mode | Request identifier | Execution environment | Typical use | Controls the open Pro window |
 | --- | --- | --- | --- | --- |
 | Project file | Allowed absolute `.aprx` path | Separate ArcGIS Pro Python process | Batch processing, project inspection, data production, export | No |
-| Python `CURRENT` host | Exact value `aprx_path="CURRENT"` | Python host running inside ArcGIS Pro | Current project, active view, selections, layouts, refresh, and most existing tools | Yes |
+| Python `CURRENT` host | `aprx_path="CURRENT"` or `"CURRENT:<process_id>"` | One Python host per ArcGIS Pro process | Selected project/window, active view, selections, layouts, refresh, and most existing tools | Yes |
 | SDK Add-In | Opaque `sdk_session_ref` | ArcGIS Pro SDK Add-In | Native events, DrawComplete, camera/time, cancellable GP, Undo/Redo, `EditOperation` | Yes |
 
 ```text
@@ -32,7 +32,7 @@ ArcGIS Pro MCP server
     +-- arcgis_pro_sdk_* -------> SDK Add-In: leases / events / native edits
 ```
 
-Absolute `.aprx` paths always use project-file mode. Only an explicit `CURRENT` request reaches the Python host. A disconnected or restarted host, or a changed project, causes the request to fail closed instead of modifying a project file on disk.
+Absolute `.aprx` paths always use project-file mode. Explicit `CURRENT` or `CURRENT:<process_id>` requests reach a Python host. A disconnected or restarted host, or a changed project, causes the request to fail closed instead of changing another window or modifying a project file on disk.
 
 For live control, the Python toolbox/script reuses existing `arcpy.mp` tools; the SDK Add-In provides native events, responsive UI operations, and `EditOperation`. They have separate discovery, authentication, and control protocols. Neither automatically takes control of the current project.
 
@@ -126,7 +126,7 @@ Inspect a tool's full schema, risks, and prerequisites:
 arcgis_pro_tool_info(name="arcgis_pro_network_solve_route")
 ```
 
-Use the runtime catalog instead of a static README tool list. `arcgis_pro_server_capabilities()` returns registered tools, read/write classifications, path requirements, extra gates, and window status.
+Use the runtime catalog instead of a static README tool list. `arcgis_pro_server_capabilities()` and `arcgis_pro_environment_info()` report the active `tool_profile`, `available_tool_profiles`, and `registered_tool_count`, along with read/write classifications, path requirements, extra gates, and window status.
 
 ### 4. Work with a project file
 
@@ -148,6 +148,20 @@ The Python host reuses many tools with an `aprx_path` parameter and is the simpl
 4. Require `window_attached=true`, `host_ready=true`, and `target_confirmed=true`. Check that `current_project` is the intended project.
 5. Run a read-only smoke test with `arcgis_pro_active_view_info(aprx_path="CURRENT")`.
 6. Pass `aprx_path="CURRENT"` only when you intend to control the open Pro window.
+
+### Multiple Pro windows
+
+Run the attachment tool in each Pro process. With no explicit port configured, the first host uses port 17865 and additional hosts automatically obtain free loopback ports. Each publishes its own private discovery record; no second MCP server configuration is required.
+
+```text
+arcgis_pro_list_windows()
+arcgis_pro_select_window(process_id=1234, expected_project="C:\\GIS_Projects\\a.aprx")
+arcgis_pro_list_maps(aprx_path="CURRENT")
+```
+
+For concurrent work, confirm each target with `arcgis_pro_window_status(process_id=1234)` and send existing project tools with `aprx_path="CURRENT:1234"`. This call-specific target does not change the default window. The default selection is local to the MCP server session. An unselected client with multiple hosts must choose a window; it never uses the first/last discovered window automatically. A selected window remains pinned to its host session, and closing it never redirects calls to a different window.
+
+Async job submission accepts `arguments.aprx_path="CURRENT:1234"`. Job status, cancellation, event polling, and detach accept `process_id=1234`. `ARCGIS_PRO_MCP_HOST_PORT` remains an optional exact deployment pin; an explicitly configured occupied port fails rather than moving to a different port. Existing attached hosts must be restarted after upgrading this checkout.
 
 The launcher prefers a compatible FastMCP installation in the repository's `.arcgis-pro-mcp-deps` directory to avoid changing Pro's system environment. If startup reports `No module named 'mcp'`, run the following in PowerShell with your actual paths:
 
@@ -229,7 +243,8 @@ Ordinary reads and writes are enabled by default. Set `ARCGIS_PRO_MCP_ALLOW_WRIT
 | `ARCGIS_PRO_MCP_SDK_ALLOW_EDIT_COMMANDS=1` | SDK Undo/Redo/save commands |
 | `ARCGIS_PRO_MCP_SDK_ALLOW_FEATURE_EDITS=1` | Native SDK feature create/update/delete operations |
 | `ARCGIS_PRO_MCP_SDK_ALLOW_DISCARD_EDITS=1` | SDK discard of all pending edits |
-| `ARCGIS_PRO_MCP_HOST_PORT` | Bind a Python `CURRENT` host to an explicit loopback port |
+| `ARCGIS_PRO_MCP_HOST_PORT` | Optional exact loopback-port pin; omit for automatic multi-window allocation and discovery |
+| `ARCGIS_PRO_MCP_TOOL_PROFILE` | Selects which MCP tools register. Defaults to `full` (460 tools, ~492 KB `tools/list`). Use `core` (60 high-leverage tools, ~52 KB) or comma-separated domain combinations such as `core,editing,raster`. Canonical domains: `window`, `project`, `data`, `gp`, `analysis`, `raster`, `stats_network`, `editing`, `cartography`, `enterprise` (module names and shorthand aliases `stats`, `network`, `schema`, `publishing`, `utility`, `sdk` are also accepted; unknown tokens fail closed) |
 
 Additional rules:
 
@@ -268,7 +283,7 @@ Use the ArcGIS Pro environment's `python.exe`, not `ArcGISPro.exe -m pip`. Insta
 
 - Confirm that the project is saved, the host is running, and the stdio server and Pro use the same host port.
 - Call `arcgis_pro_window_status()` after every host restart or project switch.
-- Give each Pro instance a different `ARCGIS_PRO_MCP_HOST_PORT`; do not rely on the first window found.
+- Run the attachment tool in every Pro instance, then use `arcgis_pro_list_windows` and explicit process selection. Manual per-window ports are optional; do not rely on the first window found.
 
 ### SDK bridge missing or multiple bridges found
 

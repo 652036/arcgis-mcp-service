@@ -109,6 +109,7 @@ Out of scope:
   protected private ACL; readers reject links/reparse points, unexpected size,
   ownership, or DACL. Do not copy either Python or SDK discovery state, and do
   not expose either loopback listener through a proxy or port forward.
+- Multi-window discovery enumerates only bounded private state files and authenticates each host; it never scans arbitrary TCP ports. Process/session records and actual-port compatibility records are isolated, and shutdown removes only records for the stopping session. Public window listings omit bearer material. Explicit `CURRENT:<process_id>` routes through call-local context, while the default selection stays pinned; an ambiguous or disconnected target never falls back to a different window. Each request still validates its expected host session and project before executing.
 - Project toolbox registration accepts compiled `.atbx`/`.tbx` toolboxes, not
   executable Python `.pyt` files. The repository's own `接入当前窗口.pyt` is a
   local ArcGIS Pro launcher and is not a general remote toolbox-loading path.

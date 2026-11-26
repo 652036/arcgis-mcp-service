@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 from typing import Any
@@ -16,10 +17,12 @@ _PUBLIC_SHARE_ENV = "ARCGIS_PRO_MCP_ALLOW_PUBLIC_SHARE"
 _PUBLISH_OVERWRITE_ENV = "ARCGIS_PRO_MCP_ALLOW_PUBLISH_OVERWRITE"
 _ENTERPRISE_WRITE_ENV = "ARCGIS_PRO_MCP_ALLOW_ENTERPRISE_WRITE"
 _ABS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 _WINDOWS_RESERVED_NAME_RE = re.compile(
     r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$",
     re.IGNORECASE,
 )
+_EXTERNAL_CONNECTION_SUFFIXES = frozenset({".sde", ".ags"})
 
 
 def _env_enabled(name: str, *, default: bool = False) -> bool:
@@ -29,12 +32,81 @@ def _env_enabled(name: str, *, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _has_control_chars(value: str) -> bool:
+    return any(ord(char) < 32 or ord(char) == 127 for char in value)
+
+
+def _is_device_path(value: str) -> bool:
+    cleaned = value.strip().strip('"')
+    return cleaned.startswith(("\\\\?\\", "\\\\.\\", "//?/", "//./"))
+
+
+def _is_unc_path(value: str) -> bool:
+    cleaned = value.strip().strip('"')
+    if cleaned.startswith("\\\\"):
+        return True
+    return cleaned.startswith("//") and not cleaned.startswith("///")
+
+
+def _unc_server_share(value: str) -> tuple[str, str] | None:
+    cleaned = value.strip().strip('"')
+    if not _is_unc_path(cleaned):
+        return None
+    normalized = cleaned.replace("/", "\\").lstrip("\\")
+    parts = [part for part in normalized.split("\\") if part]
+    if len(parts) < 2:
+        return None
+    return parts[0].lower(), parts[1].lower()
+
+
+def _ensure_unc_root_slash(path: str) -> str:
+    drive, tail = ntpath.splitdrive(path)
+    if drive.startswith("\\\\") and not tail:
+        return drive + "\\"
+    return path
+
+
+def _has_ntfs_ads(value: str) -> bool:
+    cleaned = value.strip().strip('"')
+    rest = cleaned[2:] if _DRIVE_PREFIX_RE.match(cleaned) else cleaned
+    return ":" in rest
+
+
+def _has_external_connection_ancestor(path: str) -> bool:
+    ancestor = os.path.dirname(path)
+    while ancestor:
+        if os.path.splitext(ancestor)[1].lower() in _EXTERNAL_CONNECTION_SUFFIXES:
+            return True
+        next_ancestor = os.path.dirname(ancestor)
+        if next_ancestor == ancestor:
+            break
+        ancestor = next_ancestor
+    return False
+
+
+def _validate_path_string(raw: Any, label: str) -> str:
+    if not isinstance(raw, str):
+        raise RuntimeError(f"{label} 必须为字符串")
+    if ";" in raw:
+        raise RuntimeError(f"{label} 不能包含分号（;），禁止多值路径")
+    if _has_control_chars(raw):
+        raise RuntimeError(f"{label} 不能包含控制字符")
+    cleaned = raw.strip().strip('"')
+    if not cleaned:
+        raise RuntimeError(f"{label} 必须为绝对路径")
+    if _is_device_path(cleaned):
+        raise RuntimeError(f"{label} 禁止使用 Windows 设备路径前缀")
+    if _has_ntfs_ads(cleaned):
+        raise RuntimeError(f"{label} 禁止包含 NTFS 备用数据流或非法冒号")
+    return os.path.normpath(cleaned)
+
+
 def normalize_path(p: str) -> str:
     return os.path.normpath(p.strip().strip('"'))
 
 
 def require_absolute(path: str, label: str) -> None:
-    if not os.path.isabs(path):
+    if not (os.path.isabs(path) or _is_unc_path(path)):
         raise RuntimeError(f"{label} 必须为绝对路径")
 
 
@@ -42,12 +114,16 @@ def validate_output_name(value: str, label: str, *, maximum: int = 255) -> str:
     """Validate one output basename; never let a GP name smuggle a path."""
     if not isinstance(value, str):
         raise RuntimeError(f"{label} 必须为字符串")
+    if ";" in value:
+        raise RuntimeError(f"{label} 不能包含分号（;）")
+    if _has_control_chars(value):
+        raise RuntimeError(f"{label} 含 Windows 不支持的字符")
     name = value.strip()
     if not name or len(name) > maximum or name in {".", ".."}:
         raise RuntimeError(f"{label} 必须为有效的单一名称")
-    if name.endswith((" ", ".")) or any(ord(char) < 32 for char in name):
+    if name.endswith((" ", ".")):
         raise RuntimeError(f"{label} 含 Windows 不支持的字符")
-    if any(char in name for char in ('/', '\\', ':', '*', '?', '"', '<', '>', '|')):
+    if any(char in name for char in ('/', '\\', ':', '*', '?', '"', '<', '>', '|', ';')):
         raise RuntimeError(f"{label} 只能是 basename，不能包含路径或通配符")
     if _WINDOWS_RESERVED_NAME_RE.fullmatch(name):
         raise RuntimeError(f"{label} 不能使用 Windows 保留设备名")
@@ -55,12 +131,50 @@ def validate_output_name(value: str, label: str, *, maximum: int = 255) -> str:
 
 
 def path_under_root(path: str, root: str) -> bool:
+    if not isinstance(path, str) or not isinstance(root, str):
+        return False
+    if (
+        not path.strip()
+        or not root.strip()
+        or ";" in path
+        or ";" in root
+        or _has_control_chars(path)
+        or _has_control_chars(root)
+        or _is_device_path(path)
+        or _is_device_path(root)
+        or _has_ntfs_ads(path)
+        or _has_ntfs_ads(root)
+    ):
+        return False
+    path_is_unc = _is_unc_path(path)
+    root_is_unc = _is_unc_path(root)
+    if path_is_unc != root_is_unc:
+        return False
+    if path_is_unc:
+        path_share = _unc_server_share(path)
+        root_share = _unc_server_share(root)
+        if path_share is None or root_share is None or path_share != root_share:
+            return False
+        if os.name == "nt":
+            root_real = os.path.realpath(os.path.expanduser(root))
+            path_real = os.path.realpath(os.path.expanduser(path))
+        else:
+            root_real = ntpath.normpath(root.strip().strip('"'))
+            path_real = ntpath.normpath(path.strip().strip('"'))
+        if not root_real:
+            return False
+        root_cmp = _ensure_unc_root_slash(ntpath.normcase(ntpath.normpath(root_real)).lower())
+        path_cmp = _ensure_unc_root_slash(ntpath.normcase(ntpath.normpath(path_real)).lower())
+        try:
+            return ntpath.commonpath([path_cmp, root_cmp]) == root_cmp
+        except ValueError:
+            return False
     root_real = os.path.realpath(os.path.expanduser(root))
     path_real = os.path.realpath(os.path.expanduser(path))
     if not root_real:
-        return True
-    root_cmp = os.path.normcase(root_real).lower()
-    path_cmp = os.path.normcase(path_real).lower()
+        return False
+    root_cmp = _ensure_unc_root_slash(os.path.normcase(root_real).lower())
+    path_cmp = _ensure_unc_root_slash(os.path.normcase(path_real).lower())
     try:
         return os.path.commonpath([path_cmp, root_cmp]) == root_cmp
     except ValueError:
@@ -118,11 +232,12 @@ def project_roots() -> list[str]:
 
 def validate_output_in_export_root(output_path: str, label: str) -> str:
     """Require exports to stay below an explicitly configured output root."""
-    p = normalize_path(output_path)
+    p = _validate_path_string(output_path, label)
     require_absolute(p, label)
-    root = os.environ.get("ARCGIS_PRO_MCP_EXPORT_ROOT", "").strip().strip('"')
-    if not root:
+    root_raw = os.environ.get("ARCGIS_PRO_MCP_EXPORT_ROOT", "").strip().strip('"')
+    if not root_raw:
         raise RuntimeError(f"{label} 需要配置绝对路径 ARCGIS_PRO_MCP_EXPORT_ROOT")
+    root = _validate_path_string(root_raw, "ARCGIS_PRO_MCP_EXPORT_ROOT")
     require_absolute(root, "ARCGIS_PRO_MCP_EXPORT_ROOT")
     if not path_under_root(p, root):
         rr = os.path.realpath(os.path.expanduser(root))
@@ -141,12 +256,23 @@ def validate_new_output_in_export_root(output_path: str, label: str) -> str:
 
 def validate_gp_output_path(output_path: str, label: str, *, create_parent: bool = True) -> str:
     """When ARCGIS_PRO_MCP_GP_OUTPUT_ROOT is set, outputs must stay under it."""
-    p = normalize_path(output_path)
+    p = _validate_path_string(output_path, label)
     require_absolute(p, label)
-    root = os.environ.get("ARCGIS_PRO_MCP_GP_OUTPUT_ROOT", "").strip().strip('"')
-    if root and not path_under_root(p, root):
-        rr = os.path.realpath(os.path.expanduser(root))
-        raise RuntimeError(f"{label} 必须位于 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT 内：{rr}")
+    if _has_external_connection_ancestor(p):
+        raise RuntimeError(
+            f"{label} 禁止通过普通 GP 输出写入 .sde/.ags 外部连接内部子项"
+        )
+    root_raw = os.environ.get("ARCGIS_PRO_MCP_GP_OUTPUT_ROOT", "").strip().strip('"')
+    if not root_raw:
+        if _is_unc_path(output_path) or _is_unc_path(p):
+            raise RuntimeError(
+                f"{label} 未配置 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT 时禁止使用 UNC 网络路径"
+            )
+    else:
+        root = _validate_path_string(root_raw, "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT")
+        if not path_under_root(p, root):
+            rr = os.path.realpath(os.path.expanduser(root))
+            raise RuntimeError(f"{label} 必须位于 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT 内：{rr}")
     parent = os.path.dirname(p)
     if parent and create_parent:
         # Catalog members are not filesystem directories. Creating a folder
@@ -154,7 +280,7 @@ def validate_gp_output_path(output_path: str, label: str, *, create_parent: bool
         ancestor = parent
         while ancestor:
             if os.path.splitext(ancestor)[1].lower() in {
-                ".gdb", ".geodatabase", ".sde", ".mdb", ".gpkg", ".sqlite",
+                ".gdb", ".geodatabase", ".mdb", ".gpkg", ".sqlite",
             }:
                 parent = os.path.dirname(ancestor)
             next_ancestor = os.path.dirname(ancestor)
@@ -167,12 +293,13 @@ def validate_gp_output_path(output_path: str, label: str, *, create_parent: bool
 
 def require_gp_output_root_mandatory() -> str:
     """写入型 GP 必须配置输出根目录且为绝对路径。"""
-    root = os.environ.get("ARCGIS_PRO_MCP_GP_OUTPUT_ROOT", "").strip().strip('"')
-    if not root:
+    root_raw = os.environ.get("ARCGIS_PRO_MCP_GP_OUTPUT_ROOT", "").strip().strip('"')
+    if not root_raw:
         raise RuntimeError(
             "写入型地理处理必须设置环境变量 ARCGIS_PRO_MCP_GP_OUTPUT_ROOT（绝对路径），"
             "且输出要素类路径须位于该目录下。"
         )
+    root = _validate_path_string(root_raw, "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT")
     require_absolute(root, "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT")
     return os.path.realpath(os.path.expanduser(root))
 
@@ -185,10 +312,12 @@ def validate_input_path_optional(input_path: Any, label: str) -> Any:
         return session_refs.resolve(input_path)
     if not isinstance(input_path, str):
         raise RuntimeError(f"{label} 必须为绝对路径或有效的临时对象引用")
-    p = normalize_path(input_path)
+    p = _validate_path_string(input_path, label)
     require_absolute(p, label)
     roots = _roots_from_env(_INPUT_ROOT_ENV)
     if not roots:
+        if _is_unc_path(input_path) or _is_unc_path(p):
+            raise RuntimeError(f"{label} 未配置 {_INPUT_ROOT_ENV} 时禁止使用 UNC 网络路径")
         return p
     if not any(path_under_root(p, r) for r in roots):
         raise RuntimeError(
@@ -198,17 +327,35 @@ def validate_input_path_optional(input_path: Any, label: str) -> Any:
 
 
 def is_current_project_token(project_path: str) -> bool:
-    return (project_path or "").strip().strip('"').upper() == "CURRENT"
+    if not isinstance(project_path, str):
+        return False
+    if ";" in project_path or _has_control_chars(project_path):
+        return False
+    token = project_path.strip().strip('"').upper()
+    if token == "CURRENT":
+        return True
+    if token.startswith("CURRENT:"):
+        suffix = token.removeprefix("CURRENT:")
+        if not suffix.isascii() or not suffix.isdecimal() or not 0 < int(suffix) <= 0xFFFFFFFF:
+            raise RuntimeError("窗口目标须为 CURRENT 或 CURRENT:进程号")
+        return True
+    return False
 
 
 def validate_project_path(project_path: str, label: str = "aprx_path") -> str:
     """Validate ArcGIS Pro project paths under PROJECT_ROOTS or INPUT_ROOTS."""
     if is_current_project_token(project_path):
         return "CURRENT"
-    p = normalize_path(project_path)
+    p = _validate_path_string(project_path, label)
     require_absolute(p, label)
     roots = project_roots()
-    if roots and not any(path_under_root(p, r) for r in roots):
+    if not roots:
+        if _is_unc_path(project_path) or _is_unc_path(p):
+            raise RuntimeError(
+                f"{label} 未配置 {_PROJECT_ROOT_ENV}/{_INPUT_ROOT_ENV} 时禁止使用 UNC 网络路径"
+            )
+        return p
+    if not any(path_under_root(p, r) for r in roots):
         source_env = _PROJECT_ROOT_ENV if _roots_from_env(_PROJECT_ROOT_ENV) else _INPUT_ROOT_ENV
         raise RuntimeError(
             f"{label} 必须位于 {source_env} 中的某一目录下（使用 {os.pathsep!r} 分隔多个根路径）"

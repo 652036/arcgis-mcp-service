@@ -56,10 +56,26 @@ _INPUT_KEY_WORDS = (
 )
 _OUTPUT_CONTAINER_KEYS = frozenset(
     {
+        "destination_folder",
+        "destination_workspace",
+        "out_directory",
         "out_folder",
         "out_folder_path",
+        "out_gdb_path",
+        "out_geodatabase",
+        "out_location",
         "out_path",
         "out_workspace",
+        "output_directory",
+        "output_folder",
+        "output_folder_path",
+        "output_gdb_path",
+        "output_geodatabase",
+        "output_location",
+        "output_path",
+        "output_workspace",
+        "target_folder",
+        "target_location",
         "target_workspace",
         "workspace_out",
     }
@@ -67,11 +83,33 @@ _OUTPUT_CONTAINER_KEYS = frozenset(
 _OUTPUT_NAME_KEYS = frozenset(
     {
         "feature_class_name",
+        "out_feature_class_name",
+        "out_file_name",
         "out_name",
+        "out_raster_name",
+        "out_table_name",
+        "output_file_name",
         "output_name",
         "raster_dataset_name",
         "table_name",
     }
+)
+_SENSITIVE_PARAM_TOKENS = (
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "credential",
+    "api_key",
+    "apikey",
+    "private_key",
+    "privatekey",
+    "access_key",
+    "accesskey",
+    "account_key",
+    "accountkey",
+    "authorization",
 )
 
 
@@ -151,7 +189,7 @@ def _path_mode_for_key(key: str | None) -> str | None:
     name = key.strip().lower()
     if not name:
         return None
-    if any(token in name for token in ("password", "secret", "token")):
+    if any(token in name for token in _SENSITIVE_PARAM_TOKENS):
         return "secret"
     if name == "out_name":
         return None
@@ -324,7 +362,7 @@ def list_toolboxes(arcpy: Any) -> list[str]:
     try:
         return [str(t) for t in arcpy.ListToolboxes() or []]
     except Exception as ex:
-        raise RuntimeError(f"列出工具箱失败: {ex!s}") from ex
+        raise RuntimeError(f"列出工具箱失败: {redact_text(ex)}") from ex
 
 
 def list_tools_in_toolbox(arcpy: Any, toolbox: str) -> list[str]:
@@ -334,4 +372,4 @@ def list_tools_in_toolbox(arcpy: Any, toolbox: str) -> list[str]:
     try:
         return [str(t) for t in arcpy.ListTools(f"*_{tb}") or []]
     except Exception as ex:
-        raise RuntimeError(f"列出工具失败: {ex!s}") from ex
+        raise RuntimeError(f"列出工具失败: {redact_text(ex)}") from ex

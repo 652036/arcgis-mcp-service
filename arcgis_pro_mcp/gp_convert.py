@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from arcgis_pro_mcp.paths import (
@@ -9,6 +10,7 @@ from arcgis_pro_mcp.paths import (
     require_gp_output_root_mandatory,
     validate_gp_output_path,
     validate_input_path_optional,
+    validate_output_name,
 )
 
 
@@ -17,11 +19,10 @@ def run_table_to_table(arcpy: Any, in_rows: str, out_path: str, out_name: str) -
     require_gp_output_root_mandatory()
     inf = validate_input_path_optional(in_rows, "in_rows")
     op = validate_gp_output_path(out_path, "out_path")
-    on = out_name.strip()
-    if not on:
-        raise RuntimeError("out_name 不能为空")
+    on = validate_output_name(out_name, "out_name")
+    target = validate_gp_output_path(os.path.join(op, on), "output", create_parent=False)
     arcpy.conversion.TableToTable(inf, op, on)
-    return f"{op}\\{on}"
+    return target
 
 
 def run_import_csv_to_table(arcpy: Any, in_csv: str, out_path: str, out_name: str) -> str:
@@ -32,11 +33,10 @@ def run_import_csv_to_table(arcpy: Any, in_csv: str, out_path: str, out_name: st
     if not inf.lower().endswith((".csv", ".txt", ".tab")):
         raise RuntimeError("in_csv 应为分隔文本文件（.csv/.txt/.tab）")
     op = validate_gp_output_path(out_path, "out_path")
-    on = out_name.strip()
-    if not on:
-        raise RuntimeError("out_name 不能为空")
+    on = validate_output_name(out_name, "out_name")
+    target = validate_gp_output_path(os.path.join(op, on), "output", create_parent=False)
     arcpy.conversion.TableToTable(inf, op, on)
-    return f"{op}\\{on}"
+    return target
 
 
 def run_excel_to_table(arcpy: Any, input_excel: str, out_table: str, sheet: str = "") -> None:

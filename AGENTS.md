@@ -14,12 +14,13 @@
 - Prefer native GP tools through `arcgis_pro_gp_run_tool` for supported file-based operations. Generic GP is enabled by default without a deployment tool allowlist; confirm the native name and parameter contract. Use dedicated wrappers for CURRENT context, checked quality workflows, or operations outside the generic new-output contract.
 - Prefer saving project copies or controlled outputs over overwriting source `.aprx` files or geodatabases.
 - To drive the open Pro GUI, the user must run `接入当前窗口.pyt` or `接入当前窗口.py` in Pro; then use `aprx_path=CURRENT`. Verify `arcgis_pro_window_status.host_ready` and `current_project` first. CURRENT calls fail closed if the authenticated host/session is unavailable or the project changes; absolute `.aprx` paths remain file mode.
+- For multiple Pro processes, each runs that launcher with automatic port allocation. Discover with `arcgis_pro_list_windows`, select with `arcgis_pro_select_window`, or confirm a PID using `arcgis_pro_window_status(process_id=...)` and call existing project tools with `aprx_path=CURRENT:<process_id>`. Never guess the target or let a disconnected window redirect calls to another window.
 
 ## Development
 
-- Main MCP tool registration lives in `arcgis_pro_mcp/server.py`.
+- MCP tool definitions are split by domain under `arcgis_pro_mcp/tools/` (`_registry.py` handles `ARCGIS_PRO_MCP_TOOL_PROFILE` and lazy `@tool` specs); `arcgis_pro_mcp/server.py` acts as the facade, shared runtime helpers, and registration orchestrator.
 - Path and write policy lives in `arcgis_pro_mcp/paths.py`; keep policies centralized.
-- Run `python -m compileall arcgis_pro_mcp` and `python -m unittest discover -s tests -p "test_*.py"` before pushing.
+- Run `python -m compileall arcgis_pro_mcp`, `python -m py_compile arcgis_pro_mcp_bootstrap.py "接入当前窗口.py" "接入当前窗口.pyt"`, and `python -m unittest discover -s tests -p "test_*.py"` before pushing.
 - Run `ruff check .` when the dev dependency is available.
 - Tests require `mcp>=1.20,<2`. If system Python has MCP 2.x, use the checkout-local dependencies in a scoped PowerShell session (do not modify the global installation):
 

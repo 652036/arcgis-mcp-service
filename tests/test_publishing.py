@@ -3,10 +3,22 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
 from arcgis_pro_mcp import publishing
+
+_SAFE_SDDRAFT_XML = (
+    b'<?xml version="1.0" encoding="utf-8"?>'
+    b"<SVCManifest>"
+    b"<Type>esriServiceDefinitionType_New</Type>"
+    b"<StagingSettings><PropertyArray>"
+    b"<PropertySetProperty><Key>PackageIsPublic</Key><Value>false</Value></PropertySetProperty>"
+    b"<PropertySetProperty><Key>PackageUnderMyOrg</Key><Value>false</Value></PropertySetProperty>"
+    b"</PropertyArray></StagingSettings>"
+    b"</SVCManifest>"
+)
 
 
 class FakeResult:
@@ -42,7 +54,7 @@ class FakeDraft:
 
     def exportToSDDraft(self, path):
         self.exports.append(path)
-        Path(path).write_bytes(b"safe service definition draft")
+        Path(path).write_bytes(_SAFE_SDDRAFT_XML)
 
     def analyzeSDDraft(self):
         return {"errors": [], "warnings": [(100, "token=hidden")], "token": "never return"}
@@ -79,8 +91,8 @@ class FakeServerModule:
         Path(output).write_bytes(b"staged service definition")
         return FakeResult(["Analyzer completed", "token=do-not-return"])
 
-    def UploadServiceDefinition(self, source, target):
-        self.upload_calls.append((source, target))
+    def UploadServiceDefinition(self, source, target, **kwargs):
+        self.upload_calls.append((source, target, kwargs))
         return FakeResult(["Published", "password=do-not-return"])
 
 
@@ -201,7 +213,7 @@ class PublishingTests(unittest.TestCase):
         self.assertEqual(source.draft.exports, [])
 
         input_draft = Path(self.temp_dir.name, "input-existing-test.sddraft")
-        input_draft.write_bytes(b"input")
+        input_draft.write_bytes(_SAFE_SDDRAFT_XML)
         staged_output = Path(self.temp_dir.name, "existing.sd")
         staged_output.write_bytes(b"original service")
         digest = publishing.artifact_digest(str(input_draft))["sha256"]
@@ -283,7 +295,7 @@ class PublishingTests(unittest.TestCase):
     def test_stage_requires_matching_digest_and_returns_output_digest(self):
         arcpy = FakeArcpy()
         source = Path(self.temp_dir.name, "input.sddraft")
-        source.write_bytes(b"draft")
+        source.write_bytes(_SAFE_SDDRAFT_XML)
         identity = publishing.artifact_digest(str(source))
         output = os.path.join(self.temp_dir.name, "output.sd")
         with self.assertRaisesRegex(RuntimeError, "不一致"):
@@ -316,7 +328,20 @@ class PublishingTests(unittest.TestCase):
             portal_url=self.portal_url,
         )
         self.assertTrue(result["published"])
-        self.assertEqual(arcpy.server.upload_calls, [(str(source), "HOSTING_SERVER")])
+        self.assertEqual(
+            arcpy.server.upload_calls,
+            [
+                (
+                    str(source),
+                    "HOSTING_SERVER",
+                    {
+                        "in_override": "OVERRIDE_DEFINITION",
+                        "in_public": "PRIVATE",
+                        "in_organization": "NO_SHARE_ORGANIZATION",
+                    },
+                )
+            ],
+        )
         self.assertNotIn("do-not-return", repr(result))
 
     def test_standalone_create_uses_allowlisted_ags_without_returning_its_path(self):
@@ -341,6 +366,184 @@ class PublishingTests(unittest.TestCase):
             outside.write_bytes(b"not a publishing artifact in the controlled root")
             with self.assertRaisesRegex(RuntimeError, "EXPORT_ROOT"):
                 publishing.artifact_digest(str(outside))
+
+    def test_embedded_url_credentials_in_free_text_are_rejected(self):
+        output = os.path.join(self.temp_dir.name, "free_text_secret.sddraft")
+        with self.assertRaisesRegex(RuntimeError, "URL 内联凭据"):
+            publishing.create_sharing_draft(
+                FakeArcpy(),
+                FakeSource(),
+                "EmbeddedUrlCreds",
+                output,
+                description="See https://admin:Secret123@gis.corp.com/portal for info",
+            )
+        # Normal email and plain URL without credentials should still be allowed.
+        ok_output = os.path.join(self.temp_dir.name, "clean_text.sddraft")
+        result = publishing.create_sharing_draft(
+            FakeArcpy(),
+            FakeSource(),
+            "CleanMeta",
+            ok_output,
+            portal_url=self.portal_url,
+            description="Contact gis@example.com or visit https://gis.corp.com/portal?ref=user@org",
+        )
+        self.assertEqual(result["service_name"], "CleanMeta")
+
+    def test_stage_blocks_tampered_sddraft_public_org_and_overwrite_settings(self):
+        arcpy = FakeArcpy()
+        public_draft = Path(self.temp_dir.name, "tampered_public.sddraft")
+        public_draft.write_bytes(
+            b"<SVCManifest><Type>esriServiceDefinitionType_New</Type>"
+            b"<StagingSettings><PropertyArray>"
+            b"<PropertySetProperty><Key>PackageIsPublic</Key><Value>true</Value></PropertySetProperty>"
+            b"</PropertyArray></StagingSettings></SVCManifest>"
+        )
+        public_sha = publishing.artifact_digest(str(public_draft))["sha256"]
+        with self.assertRaisesRegex(RuntimeError, "公开共享已禁用"):
+            publishing.stage_service_definition(
+                arcpy,
+                str(public_draft),
+                os.path.join(self.temp_dir.name, "pub1.sd"),
+                expected_sha256=public_sha,
+                sharing_level="OWNER",
+            )
+        with patch.dict(os.environ, {"ARCGIS_PRO_MCP_ALLOW_PUBLIC_SHARE": "1"}):
+            with self.assertRaisesRegex(RuntimeError, "冲突"):
+                publishing.stage_service_definition(
+                    arcpy,
+                    str(public_draft),
+                    os.path.join(self.temp_dir.name, "pub2.sd"),
+                    expected_sha256=public_sha,
+                    sharing_level="OWNER",
+                )
+
+        org_draft = Path(self.temp_dir.name, "tampered_org.sddraft")
+        org_draft.write_bytes(
+            b"<SVCManifest><Type>esriServiceDefinitionType_New</Type>"
+            b"<StagingSettings><PropertyArray>"
+            b"<PropertySetProperty><Key>PackageUnderMyOrg</Key><Value>true</Value></PropertySetProperty>"
+            b"</PropertyArray></StagingSettings></SVCManifest>"
+        )
+        org_sha = publishing.artifact_digest(str(org_draft))["sha256"]
+        with self.assertRaisesRegex(RuntimeError, "ORGANIZATION"):
+            publishing.stage_service_definition(
+                arcpy,
+                str(org_draft),
+                os.path.join(self.temp_dir.name, "org1.sd"),
+                expected_sha256=org_sha,
+                sharing_level="OWNER",
+            )
+
+        replace_draft = Path(self.temp_dir.name, "tampered_replace.sddraft")
+        replace_draft.write_bytes(
+            b"<SVCManifest><Type>esriServiceDefinitionType_Replacement</Type></SVCManifest>"
+        )
+        replace_sha = publishing.artifact_digest(str(replace_draft))["sha256"]
+        with self.assertRaisesRegex(RuntimeError, "覆盖发布已禁用"):
+            publishing.stage_service_definition(
+                arcpy,
+                str(replace_draft),
+                os.path.join(self.temp_dir.name, "rep1.sd"),
+                expected_sha256=replace_sha,
+                overwrite_existing_service=False,
+            )
+        with patch.dict(os.environ, {"ARCGIS_PRO_MCP_ALLOW_PUBLISH_OVERWRITE": "1"}):
+            with self.assertRaisesRegex(RuntimeError, "overwrite_existing_service=True"):
+                publishing.stage_service_definition(
+                    arcpy,
+                    str(replace_draft),
+                    os.path.join(self.temp_dir.name, "rep2.sd"),
+                    expected_sha256=replace_sha,
+                    overwrite_existing_service=False,
+                )
+            ok = publishing.stage_service_definition(
+                arcpy,
+                str(replace_draft),
+                os.path.join(self.temp_dir.name, "rep_ok.sd"),
+                expected_sha256=replace_sha,
+                overwrite_existing_service=True,
+            )
+            self.assertTrue(ok["overwrite_existing_service"])
+
+        # Malformed XML and DOCTYPE/ENTITY declarations must fail closed.
+        for filename, content in (
+            ("invalid.sddraft", b"not xml at all"),
+            ("xxe.sddraft", b'<!DOCTYPE foo [<!ENTITY xxe "boom">]><SVCManifest/>'),
+        ):
+            bad_draft = Path(self.temp_dir.name, filename)
+            bad_draft.write_bytes(content)
+            bad_sha = publishing.artifact_digest(str(bad_draft))["sha256"]
+            with self.subTest(filename=filename), self.assertRaises(RuntimeError):
+                publishing.stage_service_definition(
+                    arcpy,
+                    str(bad_draft),
+                    os.path.join(self.temp_dir.name, f"{filename}.sd"),
+                    expected_sha256=bad_sha,
+                )
+        self.assertEqual(len(arcpy.server.stage_calls), 1)
+
+    def test_publish_passes_explicit_sharing_overrides_and_blocks_tampered_sd_zip(self):
+        arcpy = FakeArcpy()
+        sd_zip = Path(self.temp_dir.name, "tampered_replace.sd")
+        with zipfile.ZipFile(sd_zip, "w") as archive:
+            archive.writestr(
+                "p20/service.sddraft",
+                "<SVCManifest><Type>esriServiceDefinitionType_Replacement</Type></SVCManifest>",
+            )
+        sd_sha = publishing.artifact_digest(str(sd_zip))["sha256"]
+        with self.assertRaisesRegex(RuntimeError, "覆盖发布已禁用"):
+            publishing.publish_service_definition(
+                arcpy,
+                str(sd_zip),
+                expected_sha256=sd_sha,
+                portal_url=self.portal_url,
+                overwrite_existing_service=False,
+            )
+        self.assertEqual(arcpy.server.upload_calls, [])
+
+        clean_sd = Path(self.temp_dir.name, "clean.sd")
+        with zipfile.ZipFile(clean_sd, "w") as archive:
+            archive.writestr("p20/service.sddraft", _SAFE_SDDRAFT_XML)
+        clean_sha = publishing.artifact_digest(str(clean_sd))["sha256"]
+
+        publishing.publish_service_definition(
+            arcpy,
+            str(clean_sd),
+            expected_sha256=clean_sha,
+            portal_url=self.portal_url,
+            sharing_level="ORGANIZATION",
+        )
+        with patch.dict(os.environ, {"ARCGIS_PRO_MCP_ALLOW_PUBLIC_SHARE": "1"}):
+            publishing.publish_service_definition(
+                arcpy,
+                str(clean_sd),
+                expected_sha256=clean_sha,
+                portal_url=self.portal_url,
+                sharing_level="EVERYONE",
+            )
+        self.assertEqual(
+            arcpy.server.upload_calls,
+            [
+                (
+                    str(clean_sd),
+                    "HOSTING_SERVER",
+                    {
+                        "in_override": "OVERRIDE_DEFINITION",
+                        "in_public": "PRIVATE",
+                        "in_organization": "SHARE_ORGANIZATION",
+                    },
+                ),
+                (
+                    str(clean_sd),
+                    "HOSTING_SERVER",
+                    {
+                        "in_override": "OVERRIDE_DEFINITION",
+                        "in_public": "PUBLIC",
+                        "in_organization": "SHARE_ORGANIZATION",
+                    },
+                ),
+            ],
+        )
 
 
 if __name__ == "__main__":

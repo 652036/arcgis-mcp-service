@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### 多 ArcGIS Pro 窗口
+- Python宿主按进程和会话独立发布私有记录，默认端口冲突时自动分配空闲回环端口；显式固定端口仍严格执行。
+- 新增 `arcgis_pro_list_windows`、`arcgis_pro_select_window`。现有工程工具支持 `CURRENT:进程号`，逐次调用独立路由和确认，支持同一MCP连接并行请求不同窗口。
+- 窗口状态、任务状态和取消、变化等待、断开工具支持指定进程。目标含糊、断开、重启或切换工程时拒绝请求，不自动改连其他窗口。
+- 增加双窗口鉴权HTTP与并行隔离回归测试，保留协议v4的会话/工程检查、私有ACL验证及原有单窗口接口。
+
 ### GIS 可靠性
 - 通用 GP 为原生加权叠加增加结构化 JSON WOTable，校验内嵌路径、权重、评价尺度和值映射。
 - 通用 GP 将地统计模型参数的 XPath 正确作为 XML 选择器传递；输入、输出模型文件仍须满足路径根限制。
@@ -28,8 +34,18 @@
 - 未设置 `ARCGIS_PRO_MCP_ALLOW_WRITE` 时，普通工程、地图和数据写入现在默认启用；
   设为 `0`、`false`、`no` 或 `off` 可切换为只读。破坏性、CIM、企业维护、发布和
   SDK 编辑门禁仍默认关闭。
+- 新增 `ARCGIS_PRO_MCP_TOOL_PROFILE` 控制启动时注册的工具子集：默认 `full`（460 个工具，`tools/list` 约 492 KB），支持 `core`（60 个高频核心工具，约 52 KB）及按域逗号组合/别名（如 `core,editing,raster`），非法值失败关闭；`arcgis_pro_environment_info` 与 `arcgis_pro_server_capabilities` 现返回 `tool_profile`、`available_tool_profiles` 和 `registered_tool_count`。
+- 将 `arcgis_pro_mcp/server.py` 拆分为 `arcgis_pro_mcp/tools/` 下 10 个领域模块，保留 `server.py` 作为向后兼容的门面与注册编排器；消除冷启动二次 Pydantic schema 构建与 MCP 调用重复脱敏/三次 JSON 编解码，提取共享脱敏助手 `arcgis_pro_mcp/_gp_common.py`，并为 `_PROJECT_CACHE`、`session_refs` 和 SDK `_SESSIONS` 增加线程安全的有界 LRU/TTL 淘汰机制。
+- CI 测试矩阵新增 Python 3.13，并启用 Ruff 对 `*.pyt` 文件的检查（`extend-include = ["*.pyt"]`）。
+
+### 安全
+- 加固 `paths.py`，统一拦截分号（`;`）、ASCII 控制字符、NTFS 备用数据流（ADS）、Windows 设备路径前缀、无根目录约束的 UNC 路径及写入 `.sde`/`.ags` 容器内部；在 `gp_convert.py` 中强制执行 `validate_output_name` 与最终目标路径校验；在 `gp_generic.py` 中扩展敏感参数键与输出容器别名覆盖。
+- 加固 `publishing.py`，打包/发布前校验 `.sddraft` XML 与 `.sd` 压缩包清单（拦截 XXE 与超大文件）并向 `UploadServiceDefinition` 显式传递覆盖与共享参数，防止预制工件绕过公开共享或覆盖门禁；扩展文本内任意位置的 URL 内嵌凭据检测。
+- 在 `redaction.py` 与 C# `SecretRedactor.cs` 中扩展前缀凭据键脱敏；在 `private_state.py` 中加固 Windows DACL 逐条 ACE 校验、关闭 `lstat`/`fstat` TOCTOU 窗口、为 `.tmp` 增加随机后缀及 Windows `os.replace` 有界重试，并在 `sdk_bridge.py` 中复用 `private_state` ACL/重解析点校验。
 
 ### 修复
+- 多窗口可靠性与目录同步：宿主重启或断开时精准清理 `_SELECTED_WINDOW` 避免 `host_status` 死锁；全链路强制执行 `ARCGIS_PRO_MCP_HOST_PORT` 精确端口钉住；回环窗口请求绕过系统与环境变量 HTTP 代理；并发探测并安全清理已退出 PID 的残留状态文件；将 `pro_host.py` `/events` 100ms 轮询升级为 `threading.Condition`；对齐 `arcgis_pro_server_capabilities`（`tools_require_allow_write` / `tools_require_window`）与 `tool_protocol.py`；在 `gp_allowlist.list_registered_gp_tools()` 补齐遗漏的 16 个已注册 GP 工具。
+- 运行期正确性与热路径修复：`da_write.delete_selected` 前通过上下文管理器关闭 `SearchCursor`；为 `editing.py` 增加一次性 nonce 防重放及 `startOperation()` 异常安全清理；删除关系类前校验 `dataType == "RelationshipClass"`；修复 `live_analysis.py` 4 处错误 ArcPy 模块名并对超大单元格/几何做安全截断；消除 `da_read.py` 重复 `ListFields` 调用；在 `gp_raster.py` 像素扫描前快速校验栅格缩放/偏移；在 `raster_checked.py` 显式配置 GDAL/OSR 异常模式。
 - 独立 MCP 服务现在使用专用 UTF-8 协议管道，并将原生标准输出诊断转到标准错误流，避免 ArcPy 本地编码消息、Win32 输出或脚本关闭 Python 标准输入破坏 JSON-RPC 通信。
 - 原生 GP 分发在缺少 ArcPy 顶层别名时，改用 `arcpy.gp` 调用已注册的 Spatial/Image Analyst 工具，按原生参数顺序传递并保留可选参数空位；执行前拒绝未知参数名。
 - 通用 GP 按原生参数方向元数据校验路径并识别输出，支持 `clip_features`、`erase_features`、`target_features`、`near_features` 等输入名称，仍执行已配置的路径根限制。
@@ -138,6 +154,9 @@
 - `arcgis_pro_gp_import_csv_to_table` 不再与 `arcgis_pro_gp_table_to_table`
   完全重复。改为调用专用的 `run_import_csv_to_table`，校验输入为分隔文本文件
   （`.csv`/`.txt`/`.tab`），并使用语义更清晰的 `in_csv` 参数名。
+- 修复 `arcgis_pro_gp_eliminate` 参数与底层 `EliminatePolygonPart` 不匹配的问题。原参数 `selection_type=LENGTH/AREA` 在运行时会直接报错。
+- 修复 `arcgis_pro_zoom_to_selection` 不再忽略 `layer_name`，现在会按指定图层（含选择集）的范围设置地图框，而不是缩放到所有图层。
+- 将服务端所有残留的 `Invalid arguments` 占位错误（selection / placement / overlap / join 枚举校验，以及 map frame / layout element / legend / text element 查找）全部替换为包含具体取值与合法集合或候选清单的可读消息。
 
 ### 变更
 - 统一并澄清门禁元数据：enterprise-write 仅保护版本管理、维护和 Utility
@@ -155,11 +174,6 @@
 - `arcgis_pro_gp_eliminate` 参数变更：移除 `selection_type`，改为 `condition`（`AREA`/`PERCENT`/`AREA_OR_PERCENT`）、`part_area`、`part_area_percent`、`part_option`。
 - `arcgis_pro_da_update_features` 移除从未生效的 `field_name` 参数，现有调用需删除该实参。
 - `da_write.insert_features` 移除从未生效的 `include_geometry_wkt` 参数；几何插入一直依赖在 `fields` 中加入 `SHAPE@WKT`。
-
-### 修复
-- 修复 `arcgis_pro_gp_eliminate` 参数与底层 `EliminatePolygonPart` 不匹配的问题。原参数 `selection_type=LENGTH/AREA` 在运行时会直接报错。
-- 修复 `arcgis_pro_zoom_to_selection` 不再忽略 `layer_name`，现在会按指定图层（含选择集）的范围设置地图框，而不是缩放到所有图层。
-- 将服务端所有残留的 `Invalid arguments` 占位错误（selection / placement / overlap / join 枚举校验，以及 map frame / layout element / legend / text element 查找）全部替换为包含具体取值与合法集合或候选清单的可读消息。
 
 ### 删除
 - 删除服务端遗留的死代码 `_query_rows` / `_sanitize_order_by` / `_MAX_QUERY_WHERE` / `_MAX_QUERY_CELL`，这些在 1.0.1 已由共享的 `da_read.query_rows` 替代。

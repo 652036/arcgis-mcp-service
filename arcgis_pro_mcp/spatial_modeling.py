@@ -13,6 +13,17 @@ import re
 from datetime import datetime
 from typing import Any
 
+from arcgis_pro_mcp._gp_common import (
+    arcpy_exists,
+    require_exists,
+    required_text,
+)
+from arcgis_pro_mcp._gp_common import (
+    gp_messages as _messages,
+)
+from arcgis_pro_mcp._gp_common import (
+    validated_enum as _enum,
+)
 from arcgis_pro_mcp.paths import (
     require_allow_write,
     require_gp_output_root_mandatory,
@@ -112,18 +123,9 @@ _FORECAST_APPROACHES = frozenset({"VALUE", "VALUE_DETREND", "RESIDUAL"})
 _EVALUATION_METHODS = frozenset({"USE_VALIDATION", "NO_VALIDATION"})
 
 
-def _enum(value: str, allowed: frozenset[str], label: str) -> str:
-    normalized = (value or "").strip().upper()
-    if normalized not in allowed:
-        raise RuntimeError(f"{label} 须为 {sorted(allowed)}")
-    return normalized
-
-
 def _field(value: str, label: str) -> str:
-    cleaned = (value or "").strip()
-    if not cleaned:
-        raise RuntimeError(f"{label} 不能为空")
-    if len(cleaned) > _FIELD_MAX or any(char in cleaned for char in ("\x00", ";", "\r", "\n")):
+    cleaned = required_text(value, label, max_length=_FIELD_MAX)
+    if any(char in cleaned for char in (";", "\r", "\n")):
         raise RuntimeError(f"{label} 无效")
     return cleaned
 
@@ -228,20 +230,12 @@ def _iso_datetime(value: str, label: str) -> datetime | None:
 
 
 def _exists(arcpy: Any, path: Any) -> bool:
-    checker = getattr(arcpy, "Exists", None)
-    if callable(checker):
-        try:
-            if bool(checker(path)):
-                return True
-        except Exception:  # noqa: BLE001
-            pass
-    return isinstance(path, str) and os.path.exists(path)
+    return arcpy_exists(arcpy, path, fallback_os_exists=True)
 
 
 def _input(arcpy: Any, value: Any, label: str) -> Any:
     path = validate_input_path_optional(value, label)
-    if not _exists(arcpy, path):
-        raise RuntimeError(f"{label} 不存在：{path}")
+    require_exists(arcpy, path, label, fallback_os_exists=True)
     return path
 
 
@@ -272,21 +266,6 @@ def _tool(arcpy: Any, toolbox_name: str, tool_name: str) -> Any:
             "请核对 Pro 版本和许可等级"
         )
     return tool
-
-
-def _messages(result: Any) -> list[str]:
-    messages: list[str] = []
-    try:
-        for index in range(int(result.messageCount)):
-            messages.append(str(result.getMessage(index)))
-    except Exception:  # noqa: BLE001
-        try:
-            combined = str(result.getMessages())
-        except Exception:  # noqa: BLE001
-            combined = ""
-        if combined:
-            messages.append(combined)
-    return messages
 
 
 def _verify_output(arcpy: Any, path: str, label: str) -> dict[str, Any]:

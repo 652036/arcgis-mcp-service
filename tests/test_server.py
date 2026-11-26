@@ -632,6 +632,38 @@ class ServerToolTests(unittest.TestCase):
         self.assertIn("arcgis_pro_active_view_info", payload["tools_read_only"])
         self.assertIn("arcgis_pro_set_active_view_extent", payload["tools_require_allow_write"])
         self.assertIn("arcgis_pro_refresh_layer", payload["tools_require_window"])
+        self.assertIn("arcgis_pro_select_window", payload["tools_require_window"])
+        self.assertIn("arcgis_pro_detach_window", payload["tools_require_window"])
+        self.assertNotIn("arcgis_pro_window_status", payload["tools_require_window"])
+        self.assertNotIn("arcgis_pro_list_windows", payload["tools_require_window"])
+
+        no_write_gate_tools = (
+            "arcgis_pro_select_window",
+            "arcgis_pro_sdk_acquire_project_lease",
+            "arcgis_pro_sdk_renew_project_lease",
+            "arcgis_pro_sdk_release_project_lease",
+            "arcgis_pro_window_job_submit",
+            "arcgis_pro_window_job_cancel",
+            "arcgis_pro_export_attribute_rules",
+            "arcgis_pro_export_contingent_values",
+        )
+        for name in no_write_gate_tools:
+            self.assertNotIn(name, payload["tools_require_allow_write"])
+
+        policy_catalog = payload["tool_policy"]
+        expected_write = {
+            name
+            for name, policy in policy_catalog.items()
+            if "ARCGIS_PRO_MCP_ALLOW_WRITE"
+            in (set(policy["gates"]) | {item["gate"] for item in policy.get("conditional_gates", [])})
+        }
+        expected_window = {
+            name
+            for name, policy in policy_catalog.items()
+            if policy["requires_current"]
+        }
+        self.assertEqual(set(payload["tools_require_allow_write"]), expected_write)
+        self.assertEqual(set(payload["tools_require_window"]), expected_window)
 
     def test_capabilities_follow_checker_version_and_required_checks(self) -> None:
         with patch.object(server, "_window_status_fields", return_value={}), patch.object(
@@ -912,3 +944,47 @@ class ServerToolTests(unittest.TestCase):
                 )
             self.assertEqual(existing.read_bytes(), b"keep")
         fake_arcpy.management.CreateDatabaseConnection.assert_not_called()
+
+    def test_da_delete_selected_closes_search_cursor_before_update_cursor(self) -> None:
+        events: list[str] = []
+
+        class TrackingCursor:
+            def __enter__(self):
+                events.append("search_enter")
+                return iter([(1,), (2,)])
+
+            def __exit__(self, *args: object) -> bool:
+                events.append("search_exit")
+                return False
+
+        def fake_delete_selected(arcpy_mod, dataset_path, where_clause, max_rows_deleted):
+            del arcpy_mod, dataset_path, where_clause, max_rows_deleted
+            events.append("delete_selected")
+            return 2, False
+
+        fake_arcpy = SimpleNamespace(
+            da=SimpleNamespace(SearchCursor=MagicMock(return_value=TrackingCursor()))
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+                "ARCGIS_PRO_MCP_ALLOW_DESTRUCTIVE": "1",
+            },
+            clear=True,
+        ), patch.object(server, "_arcpy", return_value=fake_arcpy), patch.object(
+            server,
+            "validate_input_path_optional",
+            return_value=r"C:\data\roads.gdb\roads",
+        ), patch.object(server.da_write, "delete_selected", side_effect=fake_delete_selected):
+            payload = json.loads(
+                server.arcgis_pro_da_delete_selected(
+                    r"C:\data\roads.gdb\roads",
+                    "OBJECTID > 0",
+                    max_rows_deleted=10,
+                    expected_count=2,
+                )
+            )
+
+        self.assertEqual(events, ["search_enter", "search_exit", "delete_selected"])
+        self.assertEqual(payload["rows_deleted"], 2)

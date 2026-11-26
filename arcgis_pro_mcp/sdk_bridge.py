@@ -13,20 +13,30 @@ import os
 import re
 import secrets
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from arcgis_pro_mcp.paths import validate_project_path
+from arcgis_pro_mcp.private_state import (
+    is_reparse_or_link,
+    private_file_is_trusted,
+    read_private_json,
+)
 
 _DISCOVERY_NAME = re.compile(r"^bridge-(\d+)\.json$")
 _SESSION_PREFIX = "arcgis-sdk-session:"
 _MAX_DISCOVERY_BYTES = 16_384
 _MAX_RESPONSE_BYTES = 2_097_152
+_MAX_LOCAL_SESSIONS = 128
+_DEFAULT_LEASE_TTL_SECONDS = 45.0
+_LEASE_MONOTONIC_GRACE_SECONDS = 5.0
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 _SESSIONS_LOCK = threading.RLock()
 
@@ -49,15 +59,61 @@ class _LeaseSession:
     generation: int
     project_uri: str
     expires_at_utc: str
+    expires_at_wall: float | None = None
+    expires_at_monotonic: float | None = None
 
 
-_SESSIONS: dict[str, _LeaseSession] = {}
+_SESSIONS: OrderedDict[str, _LeaseSession] = OrderedDict()
+
+
+def _parse_expiry_wall(value: str) -> float | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc).timestamp()
+
+
+def _is_session_expired(
+    session: _LeaseSession,
+    *,
+    now_wall: float,
+    now_monotonic: float,
+) -> bool:
+    if session.expires_at_wall is not None and session.expires_at_wall <= now_wall:
+        return True
+    return (
+        session.expires_at_monotonic is not None
+        and session.expires_at_monotonic <= now_monotonic
+    )
+
+
+def _prune_sessions_locked() -> None:
+    if not _SESSIONS:
+        return
+    now_wall = datetime.now(timezone.utc).timestamp()
+    now_monotonic = time.monotonic()
+    expired = [
+        ref
+        for ref, item in _SESSIONS.items()
+        if _is_session_expired(item, now_wall=now_wall, now_monotonic=now_monotonic)
+    ]
+    for ref in expired:
+        _SESSIONS.pop(ref, None)
+
+
+def _evict_overflow_sessions_locked() -> None:
+    limit = max(1, int(_MAX_LOCAL_SESSIONS))
+    while len(_SESSIONS) > limit:
+        _SESSIONS.popitem(last=False)
 
 
 def _discovery_directory() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
-    if not local_app_data:
-        raise RuntimeError("LOCALAPPDATA 未配置，无法发现 ArcGIS Pro SDK bridge")
+    if not local_app_data or not os.path.isabs(local_app_data):
+        raise RuntimeError("LOCALAPPDATA 未配置为绝对路径，无法发现 ArcGIS Pro SDK bridge")
     return Path(local_app_data) / "ArcGISProMcp" / "sdk-bridge"
 
 
@@ -71,20 +127,11 @@ def _text(value: Any, label: str, *, max_length: int) -> str:
 
 
 def _load_discovery(path: Path) -> _Discovery:
-    try:
-        if not path.is_file() or path.is_symlink():
-            raise RuntimeError("discovery 不是普通文件")
-        size = path.stat().st_size
-        if size < 2 or size > _MAX_DISCOVERY_BYTES:
-            raise RuntimeError("discovery 文件大小异常")
-        raw = path.read_bytes()
-        payload = json.loads(raw.decode("utf-8-sig"))
-    except RuntimeError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"无法读取 SDK bridge discovery：{type(exc).__name__}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("SDK bridge discovery 必须为 JSON object")
+    if not private_file_is_trusted(path, max_bytes=_MAX_DISCOVERY_BYTES):
+        raise RuntimeError("SDK bridge discovery 未通过私有权限或普通文件校验")
+    payload = read_private_json(path, max_bytes=_MAX_DISCOVERY_BYTES)
+    if not payload:
+        raise RuntimeError("无法读取可信的 SDK bridge discovery JSON object")
     try:
         process_id = int(payload["processId"])
         port = int(payload["port"])
@@ -110,7 +157,7 @@ def _load_discovery(path: Path) -> _Discovery:
 
 def _discoveries() -> list[_Discovery]:
     directory = _discovery_directory()
-    if not directory.is_dir():
+    if not directory.is_dir() or is_reparse_or_link(directory):
         return []
     values: list[_Discovery] = []
     for path in sorted(directory.glob("bridge-*.json")):
@@ -251,11 +298,14 @@ def bridge_status(process_id: int = 0) -> dict[str, Any]:
                     "error": str(exc)[:500],
                 }
             )
+    with _SESSIONS_LOCK:
+        _prune_sessions_locked()
+        active_count = len(_SESSIONS)
     return {
         "ok": True,
         "bridge_count": len(bridges),
         "bridges": bridges,
-        "active_sdk_session_count": len(_SESSIONS),
+        "active_sdk_session_count": active_count,
     }
 
 
@@ -304,14 +354,21 @@ def acquire_lease(
     if generation < 1:
         raise RuntimeError("SDK bridge lease generation 无效")
     reference = _SESSION_PREFIX + secrets.token_urlsafe(24)
+    expires_at_wall = _parse_expiry_wall(expires_at)
+    expires_at_monotonic = time.monotonic() + float(ttl) + _LEASE_MONOTONIC_GRACE_SECONDS
     with _SESSIONS_LOCK:
+        _prune_sessions_locked()
         _SESSIONS[reference] = _LeaseSession(
             discovery=discovery,
             lease_id=lease_id,
             generation=generation,
             project_uri=returned_project,
             expires_at_utc=expires_at,
+            expires_at_wall=expires_at_wall,
+            expires_at_monotonic=expires_at_monotonic,
         )
+        _SESSIONS.move_to_end(reference)
+        _evict_overflow_sessions_locked()
     return {
         "ok": True,
         "sdk_session_ref": reference,
@@ -326,9 +383,12 @@ def _session(reference: str) -> _LeaseSession:
     if not isinstance(reference, str) or not reference.startswith(_SESSION_PREFIX):
         raise RuntimeError("sdk_session_ref 无效")
     with _SESSIONS_LOCK:
+        _prune_sessions_locked()
         session = _SESSIONS.get(reference)
+        if session is not None:
+            _SESSIONS.move_to_end(reference)
     if session is None:
-        raise RuntimeError("sdk_session_ref 不存在、已释放或属于另一 MCP 进程")
+        raise RuntimeError("sdk_session_ref 不存在、已过期、已释放或属于另一 MCP 进程")
     return session
 
 
@@ -344,7 +404,7 @@ def renew_lease(reference: str) -> dict[str, Any]:
     lease = payload.get("lease")
     if not isinstance(lease, dict):
         raise RuntimeError("SDK bridge 未返回续期 lease")
-    session.expires_at_utc = _text(
+    renewed_expires = _text(
         lease.get("expiresAtUtc"), "expiresAtUtc", max_length=80
     )
     try:
@@ -353,6 +413,21 @@ def renew_lease(reference: str) -> dict[str, Any]:
         raise RuntimeError("SDK bridge 续期响应缺少 generation") from exc
     if renewed_generation != session.generation:
         raise RuntimeError("SDK bridge lease generation 在续期时意外改变")
+    renewed_wall = _parse_expiry_wall(renewed_expires)
+    now_wall = datetime.now(timezone.utc).timestamp()
+    remaining_seconds = (
+        max(10.0, renewed_wall - now_wall)
+        if renewed_wall is not None
+        else _DEFAULT_LEASE_TTL_SECONDS
+    )
+    with _SESSIONS_LOCK:
+        session.expires_at_utc = renewed_expires
+        session.expires_at_wall = renewed_wall
+        session.expires_at_monotonic = (
+            time.monotonic() + remaining_seconds + _LEASE_MONOTONIC_GRACE_SECONDS
+        )
+        if reference in _SESSIONS:
+            _SESSIONS.move_to_end(reference)
     return {
         "ok": True,
         "sdk_session_ref": reference,

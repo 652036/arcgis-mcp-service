@@ -42,6 +42,10 @@ def _backend():
         from osgeo import gdal, ogr, osr
     except ImportError as exc:
         raise RuntimeError("Checked raster adapter requires NumPy and GDAL in the executing ArcPy environment") from exc
+    for module in (gdal, ogr, osr):
+        dont_use = getattr(module, "DontUseExceptions", None)
+        if callable(dont_use):
+            dont_use()
     return np, gdal, ogr, osr
 
 

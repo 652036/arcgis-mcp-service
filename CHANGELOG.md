@@ -6,6 +6,12 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 
 ## [Unreleased]
 
+### Multiple ArcGIS Pro windows
+- Python hosts now publish independent private process/session records and automatically allocate a free loopback port when the default port is occupied. Explicit port pins remain strict.
+- Add `arcgis_pro_list_windows` and `arcgis_pro_select_window`. Existing project tools accept `CURRENT:<process_id>` with call-local routing and independent target confirmation, including concurrent requests from one MCP connection.
+- Window status, job status/cancel, change polling and detach support explicit process targets. Ambiguous, disconnected, restarted or project-switched hosts fail closed without redirecting to another window.
+- Add authenticated two-window HTTP and concurrency regression tests; retain protocol-v4 session/project checks, private ACL validation and the existing single-window interface.
+
 ### GIS reliability
 - Native Weighted Overlay now accepts a root-checked JSON WOTable with validated weights, scales and value remaps through generic GP.
 - Generic GP preserves the geostatistical model-parameter XPath as an XML selector while continuing to enforce roots on input/output model files.
@@ -29,8 +35,18 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
   `ARCGIS_PRO_MCP_ALLOW_WRITE` is unset. Set it to `0`, `false`, `no`, or `off`
   for a read-only deployment. Destructive, CIM, enterprise, publishing, and SDK
   edit gates remain disabled by default.
+- Added `ARCGIS_PRO_MCP_TOOL_PROFILE` to control startup tool registration: defaults to `full` (460 tools, ~492 KB `tools/list`), supports `core` (60 high-leverage tools, ~52 KB) and comma-separated domain combinations/aliases (such as `core,editing,raster`), and fails closed on invalid tokens. `arcgis_pro_environment_info` and `arcgis_pro_server_capabilities` now report `tool_profile`, `available_tool_profiles`, and `registered_tool_count`.
+- Split `arcgis_pro_mcp/server.py` into 10 domain modules under `arcgis_pro_mcp/tools/` while keeping `server.py` as a backwards-compatible facade and registration orchestrator. Eliminated double Pydantic schema rebuilds at cold start, eliminated duplicate full-tree redaction and triple JSON serialization on MCP calls, extracted shared redacted helpers into `arcgis_pro_mcp/_gp_common.py`, and added thread-safe bounded LRU/TTL limits for `_PROJECT_CACHE`, `session_refs`, and SDK `_SESSIONS`.
+- Added Python 3.13 to the CI matrix and enabled Ruff linting for `*.pyt` files (`extend-include = ["*.pyt"]`).
+
+### Security
+- Hardened `paths.py` to reject semicolons (`;`), ASCII control characters, NTFS alternate data streams, Windows device prefixes, unrooted UNC paths, and GP writes inside `.sde`/`.ags` containers; enforced `validate_output_name` and final target validation in `gp_convert.py`; expanded sensitive parameter keys and output container aliases in `gp_generic.py`.
+- Hardened `publishing.py` to inspect `.sddraft` XML and `.sd` archives (rejecting XXE/oversized manifests) and pass explicit override/sharing flags to `UploadServiceDefinition`, preventing prebuilt artifacts from bypassing public-sharing or overwrite gates; extended inline URL credential detection to scan free text.
+- Extended prefixed credential key redaction across `redaction.py` and C# `SecretRedactor.cs`; hardened Windows DACL ACE verification, `lstat`/`fstat` TOCTOU checks, randomized `.tmp` writes, and bounded `os.replace` retries in `private_state.py`, and enforced `private_state` ACL/reparse-point validation in `sdk_bridge.py`.
 
 ### Fixed
+- Multi-window reliability and catalog sync: clear `_SELECTED_WINDOW` on host restart or detach so `host_status` recovers cleanly without deadlocking, enforce `ARCGIS_PRO_MCP_HOST_PORT` exact pinning across discovery/selection, bypass system/env HTTP proxies for loopback window traffic, prune dead-PID stale state files with concurrent probing, replace 100ms `/events` polling in `pro_host.py` with `threading.Condition`, align `arcgis_pro_server_capabilities` (`tools_require_allow_write` / `tools_require_window`) with `tool_protocol.py`, and add the 16 missing registered GP tools to `gp_allowlist.list_registered_gp_tools()`.
+- Runtime correctness and hot-path fixes: close `SearchCursor` via context manager before `da_write.delete_selected`, add single-use nonce replay protection and lock-safe `startOperation()` cleanup in `editing.py`, verify `RelationshipClass` `dataType` before deletion, fix 4 wrong ArcPy module names and truncate oversized cells/geometries in `live_analysis.py`, avoid duplicate `ListFields` queries in `da_read.py`, validate raster scale/offset before pixel scans in `gp_raster.py`, and explicitly configure GDAL/OSR exception mode in `raster_checked.py`.
 - The standalone MCP server now reserves separate UTF-8 protocol pipes and routes native stdout diagnostics to stderr. ArcPy's local-code-page messages, Win32 stdout writes, and scripts closing Python stdin no longer corrupt the JSON-RPC stream.
 - Native GP dispatch now resolves registered Spatial/Image Analyst tools through `arcpy.gp` when a top-level ArcPy alias is absent, using native parameter order and preserving optional gaps. Unknown keyword parameters are rejected before execution.
 - Generic GP now uses native parameter direction metadata for path validation and output discovery, allowing inputs such as `clip_features`, `erase_features`, `target_features`, and `near_features` without weakening configured roots.
@@ -176,6 +192,9 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
   `arcgis_pro_gp_table_to_table`. It now routes through a dedicated
   `run_import_csv_to_table` that validates the input is a delimited text file
   (`.csv`/`.txt`/`.tab`) and uses the clearer `in_csv` parameter name.
+- Fixed `arcgis_pro_gp_eliminate` so its parameters now correctly reflect the underlying `EliminatePolygonPart` GP. The previous `selection_type=LENGTH/AREA` was incompatible with the tool and would fail at runtime.
+- Fixed `arcgis_pro_zoom_to_selection` to actually honor `layer_name`. It now sets the map frame extent to the specified layer's (selection) extent instead of zooming to all layers.
+- Replaced every remaining `Invalid arguments` placeholder in server-side validation sites (selection / placement / overlap / join enums and map frame / layout element / legend / text element lookups) with messages that include the offending value and a list of valid choices or available candidates.
 
 ### Changed
 - Clarified and aligned gate metadata so enterprise-write permission protects
@@ -197,11 +216,6 @@ Chinese version: [`CHANGELOG.zh-CN.md`](./CHANGELOG.zh-CN.md)
 - `arcgis_pro_gp_eliminate` parameters renamed: `selection_type` removed; new parameters are `condition` (`AREA`/`PERCENT`/`AREA_OR_PERCENT`), `part_area`, `part_area_percent`, `part_option`.
 - `arcgis_pro_da_update_features` no longer accepts the unused `field_name` argument; clients should drop it from existing calls.
 - `da_write.insert_features` no longer accepts the unused `include_geometry_wkt` argument; geometry insertion has always been driven by including `SHAPE@WKT` in `fields`.
-
-### Fixed
-- Fixed `arcgis_pro_gp_eliminate` so its parameters now correctly reflect the underlying `EliminatePolygonPart` GP. The previous `selection_type=LENGTH/AREA` was incompatible with the tool and would fail at runtime.
-- Fixed `arcgis_pro_zoom_to_selection` to actually honor `layer_name`. It now sets the map frame extent to the specified layer's (selection) extent instead of zooming to all layers.
-- Replaced every remaining `Invalid arguments` placeholder in server-side validation sites (selection / placement / overlap / join enums and map frame / layout element / legend / text element lookups) with messages that include the offending value and a list of valid choices or available candidates.
 
 ### Removed
 - Removed the dead server-side `_query_rows`, `_sanitize_order_by`, `_MAX_QUERY_WHERE`, and `_MAX_QUERY_CELL` helpers superseded in 1.0.1 by the shared `da_read.query_rows` implementation.

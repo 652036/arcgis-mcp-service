@@ -104,7 +104,7 @@ class ProHostTests(unittest.TestCase):
         self.assertFalse(expired.claim())
         self.assertEqual(expired.state, "CANCELLED")
 
-    def test_default_single_instance_and_explicit_port_state_paths_are_isolated(self) -> None:
+    def test_automatic_multi_instance_and_explicit_port_state_paths_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             with (
                 patch.dict(os.environ, {}, clear=False),
@@ -116,7 +116,7 @@ class ProHostTests(unittest.TestCase):
             ):
                 os.environ.pop(pro_attach.ENV_PORT, None)
                 default_path = pro_attach.state_path()
-                self.assertEqual(pro_host._candidate_ports(), [pro_attach.DEFAULT_PORT])
+                self.assertEqual(pro_host._candidate_ports(), [pro_attach.DEFAULT_PORT, 0])
 
                 with patch.dict(
                     os.environ,
@@ -162,6 +162,52 @@ class ProHostTests(unittest.TestCase):
                 print("工程：demo")
             pro_host._prefer_replace_errors_on_stdio()
             print("工程：demo")
+
+    def test_prune_stale_state_files_only_removes_unreachable_dead_pid_records(self) -> None:
+        import secrets
+        import socket
+
+        from arcgis_pro_mcp.private_state import write_private_json
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            closed_port = int(sock.getsockname()[1])
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            dead_session = secrets.token_hex(16)
+            dead_state = {
+                "service": pro_attach.SERVICE_NAME,
+                "protocol_version": pro_attach.PROTOCOL_VERSION,
+                "package_version": pro_attach.PACKAGE_VERSION,
+                "port": closed_port,
+                "pid": 99999992,
+                "project": r"C:\GIS\dead.aprx",
+                "session_id": dead_session,
+                "token": "dead-token",
+            }
+            dead_inst = root_path / f"arcgis-pro-mcp-instance-99999992-{dead_session}.json"
+            dead_compat = root_path / f"arcgis-pro-mcp-host-{closed_port}.json"
+            write_private_json(dead_inst, dead_state, temp_tag=dead_session)
+            write_private_json(dead_compat, dead_state, temp_tag=dead_session)
+
+            live_session = secrets.token_hex(16)
+            live_pid = os.getpid()
+            live_state = {
+                **dead_state,
+                "pid": live_pid,
+                "session_id": live_session,
+                "project": r"C:\GIS\busy.aprx",
+            }
+            live_inst = root_path / f"arcgis-pro-mcp-instance-{live_pid}-{live_session}.json"
+            write_private_json(live_inst, live_state, temp_tag=live_session)
+
+            with patch.object(pro_attach, "HEALTH_TIMEOUT", 0.05):
+                removed = pro_attach.prune_stale_state_files(directory=root_path)
+            self.assertEqual(removed, 2)
+            self.assertFalse(dead_inst.exists())
+            self.assertFalse(dead_compat.exists())
+            self.assertTrue(live_inst.exists())
 
 
 if __name__ == "__main__":

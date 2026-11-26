@@ -26,7 +26,7 @@ Ordinary reads and writes are enabled by default. Set `ARCGIS_PRO_MCP_ALLOW_WRIT
 | `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` | Deprecated and ignored. No deployment tool allowlist is required for standalone generic GP. |
 | `ARCGIS_PRO_MCP_PORTAL_ALLOWLIST` | Exact canonical HTTPS Portal targets for publishing. |
 | `ARCGIS_PRO_MCP_SERVER_ALLOWLIST` | Exact canonical HTTPS server/FeatureServer targets or exact approved `.ags` connection paths, depending on the tool. |
-| `ARCGIS_PRO_MCP_HOST_PORT` | Matches one Python CURRENT host to one MCP client. Use a distinct explicit port for each concurrent Pro instance. |
+| `ARCGIS_PRO_MCP_HOST_PORT` | Optional exact Python-host port pin. When unset, concurrent Pro hosts allocate free loopback ports and publish independent private discovery records. Explicit window selection or `CURRENT:<process_id>` identifies the target. |
 | `ARCGIS_PRO_MCP_SDK_GP_ALLOWLIST` | Exact SDK GP tools; a tool must also have a built-in reviewed typed contract. |
 | `ARCGIS_PRO_MCP_SDK_GP_ENV_ALLOWLIST` | Allowed SDK GP environment names. Only environments implemented by the bridge contract are usable. |
 | `ARCGIS_PRO_MCP_SDK_ALLOW_EDIT_COMMANDS` | Additional gate for native undo/redo/save/discard commands. |
