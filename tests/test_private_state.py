@@ -4,6 +4,7 @@ import ctypes
 import os
 import tempfile
 import unittest
+from contextlib import ExitStack
 from ctypes import wintypes
 from pathlib import Path
 from types import SimpleNamespace
@@ -166,11 +167,16 @@ class PrivateStateTests(unittest.TestCase):
                     raise PermissionError("sharing violation")
                 real_replace(src, dst)
 
-            with (
-                patch.object(private_state.os, "replace", side_effect=flaky_replace),
-                patch.object(private_state.os, "name", "nt"),
-                patch.object(private_state.time, "sleep") as sleep_mock,
-            ):
+            is_windows = os.name == "nt"
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(private_state.os, "replace", side_effect=flaky_replace))
+                stack.enter_context(patch.object(private_state.os, "name", "nt"))
+                sleep_mock = stack.enter_context(patch.object(private_state.time, "sleep"))
+                if not is_windows:
+                    stack.enter_context(patch.object(private_state, "_set_windows_private_acl"))
+                    stack.enter_context(
+                        patch.object(private_state, "_windows_owner_and_dacl_are_private", return_value=True)
+                    )
                 write_private_json(path, {"session_id": "ok"}, temp_tag="session-a")
 
             self.assertEqual(attempts["count"], 3)

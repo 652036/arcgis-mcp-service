@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 from typing import Any
@@ -59,7 +60,7 @@ def _unc_server_share(value: str) -> tuple[str, str] | None:
 
 
 def _ensure_unc_root_slash(path: str) -> str:
-    drive, tail = os.path.splitdrive(path)
+    drive, tail = ntpath.splitdrive(path)
     if drive.startswith("\\\\") and not tail:
         return drive + "\\"
     return path
@@ -105,7 +106,7 @@ def normalize_path(p: str) -> str:
 
 
 def require_absolute(path: str, label: str) -> None:
-    if not os.path.isabs(path):
+    if not (os.path.isabs(path) or _is_unc_path(path)):
         raise RuntimeError(f"{label} 必须为绝对路径")
 
 
@@ -153,6 +154,20 @@ def path_under_root(path: str, root: str) -> bool:
         path_share = _unc_server_share(path)
         root_share = _unc_server_share(root)
         if path_share is None or root_share is None or path_share != root_share:
+            return False
+        if os.name == "nt":
+            root_real = os.path.realpath(os.path.expanduser(root))
+            path_real = os.path.realpath(os.path.expanduser(path))
+        else:
+            root_real = ntpath.normpath(root.strip().strip('"'))
+            path_real = ntpath.normpath(path.strip().strip('"'))
+        if not root_real:
+            return False
+        root_cmp = _ensure_unc_root_slash(ntpath.normcase(ntpath.normpath(root_real)).lower())
+        path_cmp = _ensure_unc_root_slash(ntpath.normcase(ntpath.normpath(path_real)).lower())
+        try:
+            return ntpath.commonpath([path_cmp, root_cmp]) == root_cmp
+        except ValueError:
             return False
     root_real = os.path.realpath(os.path.expanduser(root))
     path_real = os.path.realpath(os.path.expanduser(path))
