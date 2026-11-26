@@ -16,7 +16,7 @@
 
 - [ ] New file-reading tools go through `arcgis_pro_mcp/paths.py` input-root / project-root validation.
 - [ ] New file-writing tools respect `ARCGIS_PRO_MCP_ALLOW_WRITE` and the export / GP output roots.
-- [ ] No new way to run arbitrary GP tools outside the allowlist.
+- [ ] Generic Python GP changes preserve the creation-only, output-root, and prohibited-tool boundaries (and any SDK GP or `CURRENT` live-analysis GP stays within its explicit allowlist and typed contract).
 - [ ] No database credentials are accepted inline by default.
 
 ## Test plan

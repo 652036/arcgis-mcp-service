@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 import time
 from typing import Any
 
@@ -20,10 +21,33 @@ from arcgis_pro_mcp.paths import (
 
 _TOKEN_SECRET = secrets.token_bytes(32)
 _TOKEN_TTL_SECONDS = 300
+_CONSUMED_TOKENS_LOCK = threading.Lock()
+_CONSUMED_TOKENS: dict[str, float] = {}
 _MAX_OPERATIONS = 50
 _MAX_PREFLIGHT_ROWS = 5000
 _MAX_GEOMETRY_UPDATES = 1000
 _MAX_GEOMETRY_TEXT_BYTES = 5_000_000
+
+
+def _prune_consumed_tokens_locked(now: float) -> None:
+    expired = [jti for jti, exp in _CONSUMED_TOKENS.items() if exp <= now]
+    for jti in expired:
+        _CONSUMED_TOKENS.pop(jti, None)
+
+
+def _is_token_consumed(jti: str, now: float) -> bool:
+    with _CONSUMED_TOKENS_LOCK:
+        _prune_consumed_tokens_locked(now)
+        return jti in _CONSUMED_TOKENS
+
+
+def _consume_token(jti: str, expires_at: float) -> None:
+    now = time.time()
+    with _CONSUMED_TOKENS_LOCK:
+        _prune_consumed_tokens_locked(now)
+        if jti in _CONSUMED_TOKENS:
+            raise RuntimeError("edit_token 已被使用，请重新执行 edit_preflight")
+        _CONSUMED_TOKENS[jti] = expires_at
 
 
 def _canonical(value: Any) -> bytes:
@@ -57,8 +81,16 @@ def _verify_token(token: str) -> dict[str, Any]:
         raise
     except Exception as ex:  # noqa: BLE001
         raise RuntimeError("edit_token 格式无效") from ex
-    if float(payload.get("expires_at", 0)) < time.time():
+    if not isinstance(payload, dict):
+        raise RuntimeError("edit_token 格式无效")
+    jti = payload.get("jti")
+    if not isinstance(jti, str) or not jti.strip():
+        raise RuntimeError("edit_token 缺少有效 jti")
+    now = time.time()
+    if float(payload.get("expires_at", 0)) <= now:
         raise RuntimeError("edit_token 已过期，请重新执行 edit_preflight")
+    if _is_token_consumed(jti, now):
+        raise RuntimeError("edit_token 已被使用，请重新执行 edit_preflight")
     return payload
 
 
@@ -263,6 +295,7 @@ def edit_preflight(
     plan = _operation_plan(arcpy, dataset, normalized)
     issued_at = time.time()
     payload = {
+        "jti": secrets.token_urlsafe(16),
         "scope": "dataset",
         "dataset": normalize_path(dataset),
         "operations_digest": hashlib.sha256(_canonical(normalized)).hexdigest(),
@@ -382,12 +415,15 @@ def edit_apply(
         raise RuntimeError("目标行在预检后已改变，请重新预检；本次未写入")
 
     workspace, multiuser_mode = _workspace_for_dataset(arcpy, dataset)
+    _consume_token(str(token_payload["jti"]), float(token_payload["expires_at"]))
     editor = arcpy.da.Editor(workspace)
     results: list[dict[str, Any]] = []
     committed = False
     editor.startEditing(False, multiuser_mode)
-    editor.startOperation()
+    operation_started = False
     try:
+        editor.startOperation()
+        operation_started = True
         for index, op in enumerate(normalized):
             kind = op["kind"]
             expected = int(plan[index]["affected_count"])
@@ -398,11 +434,13 @@ def edit_apply(
                 )
             results.append({"index": index, "kind": kind, "changed_count": changed})
         editor.stopOperation()
+        operation_started = False
         editor.stopEditing(True)
         committed = True
     except BaseException:
         try:
-            editor.abortOperation()
+            if operation_started:
+                editor.abortOperation()
         finally:
             editor.stopEditing(False)
         raise
@@ -496,6 +534,7 @@ def workspace_edit_preflight(
     plans = _workspace_plans(arcpy, normalized)
     issued_at = time.time()
     payload = {
+        "jti": secrets.token_urlsafe(16),
         "scope": "workspace",
         "workspace": workspace,
         "operations_digest": hashlib.sha256(_canonical(normalized)).hexdigest(),
@@ -538,11 +577,14 @@ def workspace_edit_apply(
     if _workspace_plan_state(plans) != token_payload.get("plan"):
         raise RuntimeError("workspace 目标行在预检后已改变；本次未写入")
 
+    _consume_token(str(token_payload["jti"]), float(token_payload["expires_at"]))
     editor = arcpy.da.Editor(workspace)
     results: list[dict[str, Any]] = []
     editor.startEditing(False, multiuser_mode)
-    editor.startOperation()
+    operation_started = False
     try:
+        editor.startOperation()
+        operation_started = True
         for index, operation in enumerate(normalized):
             dataset = operation["dataset_path"]
             payload = dict(operation)
@@ -564,10 +606,12 @@ def workspace_edit_apply(
                 }
             )
         editor.stopOperation()
+        operation_started = False
         editor.stopEditing(True)
     except BaseException:
         try:
-            editor.abortOperation()
+            if operation_started:
+                editor.abortOperation()
         finally:
             editor.stopEditing(False)
         raise

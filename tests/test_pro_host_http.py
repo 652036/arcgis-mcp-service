@@ -58,8 +58,9 @@ def _request_json(
         headers=headers,
         method=method,
     )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             status = int(response.status)
             body = response.read()
     except urllib.error.HTTPError as exc:

@@ -23,8 +23,8 @@ labels: ["bug"]
 - `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT` =
 - `ARCGIS_PRO_MCP_INPUT_ROOTS` =
 - `ARCGIS_PRO_MCP_PROJECT_ROOTS` =
-- `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP` =
-- `ARCGIS_PRO_MCP_GENERIC_GP_ALLOWLIST` =
+- `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP` = <!-- defaults to enabled when unset; set to 0 to disable -->
+- `ARCGIS_PRO_MCP_SDK_GP_ALLOWLIST` = <!-- optional; SDK Add-In GP only -->
 
 ## What happened
 

@@ -20,13 +20,13 @@ The tool result is structured JSON. Check explicit outcome, verification, counts
 
 ### Python CURRENT Host
 
-- Attach/status: `arcgis_pro_window_status`, `arcgis_pro_detach_window`
+- Attach/discovery/status: `arcgis_pro_list_windows`, `arcgis_pro_select_window`, `arcgis_pro_window_status`, `arcgis_pro_detach_window`
 - Active state: `arcgis_pro_active_view_info`
 - View focus: `arcgis_pro_open_map_view`, `arcgis_pro_open_layout_view`, `arcgis_pro_open_report_view`, `arcgis_pro_close_views`. The close tool rejects closing the currently active view category because doing so can terminate the foreground `CURRENT` host; focus a different view category first.
 - Camera/redraw: `arcgis_pro_set_active_view_extent`, `arcgis_pro_zoom_active_view_to_layer`, `arcgis_pro_zoom_active_view_to_all_layers`, `arcgis_pro_refresh_layer`
 - Bounded jobs/change wait: `arcgis_pro_window_job_submit`, `arcgis_pro_window_job_status`, `arcgis_pro_window_job_cancel`, `arcgis_pro_window_wait_for_change`
 
-Pass the exact token `aprx_path="CURRENT"`. Only tools with an `aprx_path` parameter can be forwarded.
+Pass the exact token `aprx_path="CURRENT"` for the confirmed default window, or `aprx_path="CURRENT:<process_id>"` for a separately confirmed Pro process. Only tools with an `aprx_path` parameter can be forwarded.
 
 ### Native SDK Bridge
 

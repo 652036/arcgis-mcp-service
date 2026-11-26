@@ -46,6 +46,7 @@ arcgis-pro-mcp = "arcgis_pro_mcp.__main__:main"
 packages = ["arcgis_pro_mcp"]
 
 [tool.ruff]
+extend-include = ["*.pyt"]
 line-length = 120
 target-version = "py310"
 

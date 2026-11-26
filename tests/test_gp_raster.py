@@ -151,6 +151,19 @@ class RasterPolicyTests(unittest.TestCase):
         backend.assert_called_once_with()
         self.arcpy.sa.Reclassify.assert_not_called()
 
+    def test_error_policy_rejects_scaled_or_offset_raster_before_pixel_scan(self) -> None:
+        for meta in ({"scale": 0.1, "offset": 0}, {"scale": 1, "offset": 5.0}):
+            ds = MagicMock()
+            with (
+                self.subTest(meta=meta),
+                patch.object(raster_checked, "_backend", return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock())),
+                patch.object(raster_checked, "_raster", return_value=(ds, meta)),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "SCALED_RECLASS_INPUT_UNSUPPORTED"):
+                    self.reclassify(reclass_field="Value", missing_values="ERROR")
+            ds.GetRasterBand.assert_not_called()
+            self.arcpy.sa.Reclassify.assert_not_called()
+
     def test_native_missing_value_policies_allow_attribute_fields_without_scan(self) -> None:
         for policy in ("DATA", "NODATA"):
             self.arcpy.reset_mock()

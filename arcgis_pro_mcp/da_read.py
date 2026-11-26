@@ -10,16 +10,16 @@ _MAX_CELL = 2000
 _SKIP_TYPES = frozenset({"Geometry", "Raster"})
 
 
-def _field_names_exist(arcpy: Any, dataset_path: str, fields: list[str]) -> set[str]:
-    valid = {f.name for f in arcpy.ListFields(dataset_path)}
-    missing = [x for x in fields if x not in valid]
+def _validate_and_map_fields(
+    arcpy: Any,
+    dataset_path: str,
+    fields: list[str],
+) -> dict[str, str]:
+    types = {f.name: f.type for f in arcpy.ListFields(dataset_path)}
+    missing = [x for x in fields if x not in types]
     if missing:
-        raise RuntimeError(f"未知字段：{missing}；可用字段示例：{sorted(valid)[:40]}...")
-    return valid
-
-
-def _field_type_map(arcpy: Any, dataset_path: str) -> dict[str, str]:
-    return {f.name: f.type for f in arcpy.ListFields(dataset_path)}
+        raise RuntimeError(f"未知字段：{missing}；可用字段示例：{sorted(types)[:40]}...")
+    return types
 
 
 def table_sample(
@@ -42,8 +42,7 @@ def table_sample(
     for f in fnames:
         if f.upper().startswith("SHAPE@"):
             raise RuntimeError("几何请使用参数 include_shape_wkt=true，勿在 fields 中传入 SHAPE@*")
-    _field_names_exist(arcpy, dataset_path, fnames)
-    types = _field_type_map(arcpy, dataset_path)
+    types = _validate_and_map_fields(arcpy, dataset_path, fnames)
     cursor_fields: list[str] = []
     for f in fnames:
         t = types.get(f, "")
@@ -99,8 +98,7 @@ def query_rows(
     for f in fnames:
         if f.upper().startswith("SHAPE@"):
             raise RuntimeError("几何请使用参数 include_shape_wkt=true，勿在 fields 中传入 SHAPE@*")
-    _field_names_exist(arcpy, dataset_path, fnames)
-    types = _field_type_map(arcpy, dataset_path)
+    types = _validate_and_map_fields(arcpy, dataset_path, fnames)
     cursor_fields: list[str] = []
     for f in fnames:
         t = types.get(f, "")
@@ -152,8 +150,7 @@ def distinct_values(
         raise RuntimeError("where_clause 过长")
     mv = max(1, min(int(max_values), 1000))
     mscan = max(1, min(int(max_rows_scanned), 500_000))
-    _field_names_exist(arcpy, dataset_path, [fn])
-    types = _field_type_map(arcpy, dataset_path)
+    types = _validate_and_map_fields(arcpy, dataset_path, [fn])
     if types.get(fn) in _SKIP_TYPES:
         raise RuntimeError("不支持对几何/栅格字段做 distinct")
     seen: set[Any] = set()

@@ -10,12 +10,23 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import stat
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 MAX_PRIVATE_STATE_BYTES = 16_384
+_WINDOWS_ALLOWED_EXTRA_SIDS = ("S-1-5-18", "S-1-5-32-544")
+_SE_DACL_PRESENT = 0x0004
+_SE_DACL_PROTECTED = 0x1000
+_ACL_SIZE_INFORMATION = 2
+_ACCESS_ALLOWED_ACE_TYPE = 0
+_ACCESS_DENIED_ACE_TYPE = 1
+_INHERIT_ONLY_ACE = 0x08
+_WINDOWS_REPLACE_ATTEMPTS = 6
+_WINDOWS_REPLACE_BASE_DELAY_SECONDS = 0.01
 
 
 def default_state_directory() -> Path:
@@ -32,14 +43,23 @@ def default_state_directory() -> Path:
     return base / f"arcgis-pro-mcp-{uid}" / "window-host"
 
 
-def _is_reparse_or_link(path: Path) -> bool:
+def _stat_is_reparse_or_link(path: Path, info: os.stat_result) -> bool:
+    attributes = int(getattr(info, "st_file_attributes", 0) or 0)
+    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    return stat.S_ISLNK(info.st_mode) or path.is_symlink() or bool(attributes & reparse_flag)
+
+
+def is_reparse_or_link(path: Path) -> bool:
+    """Return whether path is a symlink or Windows NTFS reparse point/junction."""
+
     try:
         info = path.lstat()
     except OSError:
         return False
-    attributes = int(getattr(info, "st_file_attributes", 0) or 0)
-    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
-    return path.is_symlink() or bool(attributes & reparse_flag)
+    return _stat_is_reparse_or_link(path, info)
+
+
+_is_reparse_or_link = is_reparse_or_link
 
 
 def _current_windows_sid() -> str:
@@ -190,6 +210,27 @@ def _windows_owner_and_dacl_are_private(path: Path) -> bool:
     import ctypes
     from ctypes import wintypes
 
+    class _AclSizeInformation(ctypes.Structure):
+        _fields_ = [
+            ("AceCount", wintypes.DWORD),
+            ("AclBytesInUse", wintypes.DWORD),
+            ("AclBytesFree", wintypes.DWORD),
+        ]
+
+    class _AceHeader(ctypes.Structure):
+        _fields_ = [
+            ("AceType", ctypes.c_ubyte),
+            ("AceFlags", ctypes.c_ubyte),
+            ("AceSize", ctypes.c_ushort),
+        ]
+
+    class _AccessAllowedAce(ctypes.Structure):
+        _fields_ = [
+            ("Header", _AceHeader),
+            ("Mask", wintypes.DWORD),
+            ("SidStart", wintypes.DWORD),
+        ]
+
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     advapi32.GetNamedSecurityInfoW.argtypes = [
@@ -203,14 +244,34 @@ def _windows_owner_and_dacl_are_private(path: Path) -> bool:
         ctypes.POINTER(ctypes.c_void_p),
     ]
     advapi32.GetNamedSecurityInfoW.restype = wintypes.DWORD
-    advapi32.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
-    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+    advapi32.ConvertStringSidToSidW.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    advapi32.ConvertStringSidToSidW.restype = wintypes.BOOL
     advapi32.GetSecurityDescriptorControl.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_ushort),
         ctypes.POINTER(wintypes.DWORD),
     ]
     advapi32.GetSecurityDescriptorControl.restype = wintypes.BOOL
+    advapi32.GetAclInformation.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.c_int,
+    ]
+    advapi32.GetAclInformation.restype = wintypes.BOOL
+    advapi32.GetAce.argtypes = [
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    advapi32.GetAce.restype = wintypes.BOOL
+    advapi32.IsValidSid.argtypes = [ctypes.c_void_p]
+    advapi32.IsValidSid.restype = wintypes.BOOL
+    advapi32.EqualSid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    advapi32.EqualSid.restype = wintypes.BOOL
     kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
     kernel32.LocalFree.restype = wintypes.HLOCAL
 
@@ -231,14 +292,10 @@ def _windows_owner_and_dacl_are_private(path: Path) -> bool:
     )
     if status:
         return False
+    allocated_sids: list[ctypes.c_void_p] = []
     try:
-        rendered = wintypes.LPWSTR()
-        if not owner or not advapi32.ConvertSidToStringSidW(owner, ctypes.byref(rendered)):
+        if not owner or not dacl or not advapi32.IsValidSid(owner):
             return False
-        try:
-            owner_sid = str(rendered.value)
-        finally:
-            kernel32.LocalFree(rendered)
         control = ctypes.c_ushort()
         revision = wintypes.DWORD()
         if not advapi32.GetSecurityDescriptorControl(
@@ -247,8 +304,57 @@ def _windows_owner_and_dacl_are_private(path: Path) -> bool:
             ctypes.byref(revision),
         ):
             return False
-        return bool(dacl) and owner_sid == _current_windows_sid() and bool(control.value & 0x1000)
+        required_flags = _SE_DACL_PRESENT | _SE_DACL_PROTECTED
+        if (control.value & required_flags) != required_flags:
+            return False
+
+        allowed_sid_strings = (_current_windows_sid(), *_WINDOWS_ALLOWED_EXTRA_SIDS)
+        for sid_text in allowed_sid_strings:
+            sid_ptr = ctypes.c_void_p()
+            if not advapi32.ConvertStringSidToSidW(sid_text, ctypes.byref(sid_ptr)) or not sid_ptr:
+                return False
+            allocated_sids.append(sid_ptr)
+
+        current_sid_ptr = allocated_sids[0]
+        if not advapi32.EqualSid(owner, current_sid_ptr):
+            return False
+
+        acl_info = _AclSizeInformation()
+        if not advapi32.GetAclInformation(
+            dacl,
+            ctypes.byref(acl_info),
+            ctypes.sizeof(acl_info),
+            _ACL_SIZE_INFORMATION,
+        ):
+            return False
+        if acl_info.AceCount < 1:
+            return False
+
+        has_current_user_allow = False
+        min_ace_size = ctypes.sizeof(_AccessAllowedAce)
+        sid_offset = _AccessAllowedAce.SidStart.offset
+        for index in range(acl_info.AceCount):
+            ace_ptr = ctypes.c_void_p()
+            if not advapi32.GetAce(dacl, index, ctypes.byref(ace_ptr)) or not ace_ptr.value:
+                return False
+            header = _AceHeader.from_address(ace_ptr.value)
+            if header.AceType == _ACCESS_DENIED_ACE_TYPE:
+                continue
+            if header.AceType != _ACCESS_ALLOWED_ACE_TYPE or header.AceSize < min_ace_size:
+                return False
+            trustee_sid = ctypes.c_void_p(ace_ptr.value + sid_offset)
+            if not advapi32.IsValidSid(trustee_sid):
+                return False
+            if not any(bool(advapi32.EqualSid(trustee_sid, allowed)) for allowed in allocated_sids):
+                return False
+            if not (header.AceFlags & _INHERIT_ONLY_ACE) and bool(
+                advapi32.EqualSid(trustee_sid, current_sid_ptr)
+            ):
+                has_current_user_allow = True
+        return has_current_user_allow
     finally:
+        for sid_ptr in allocated_sids:
+            kernel32.LocalFree(sid_ptr)
         kernel32.LocalFree(descriptor)
 
 
@@ -287,28 +393,40 @@ def _prepare_private_directory(directory: Path) -> None:
         raise RuntimeError("无法验证窗口宿主状态目录的当前用户私有权限")
 
 
-def private_file_is_trusted(path: Path, *, max_bytes: int = MAX_PRIVATE_STATE_BYTES) -> bool:
-    """Return whether an existing state file satisfies the local trust contract."""
+def _trusted_file_stat(path: Path, *, max_bytes: int = MAX_PRIVATE_STATE_BYTES) -> os.stat_result | None:
+    """Validate an existing state file and return its pre-open lstat identity."""
 
     try:
         if not path.parent.is_dir() or _is_reparse_or_link(path.parent):
-            return False
+            return None
         if not _permissions_are_private(path.parent, directory=True):
-            return False
-        info = path.lstat()
-        if _is_reparse_or_link(path) or not stat.S_ISREG(info.st_mode):
-            return False
-        if info.st_size < 2 or info.st_size > max_bytes:
-            return False
-        return _permissions_are_private(path, directory=False)
+            return None
+        before = path.lstat()
+        if _stat_is_reparse_or_link(path, before) or not stat.S_ISREG(before.st_mode):
+            return None
+        if before.st_size < 2 or before.st_size > max_bytes:
+            return None
+        if not _permissions_are_private(path, directory=False):
+            return None
+        after_acl = path.lstat()
+        if (before.st_dev, before.st_ino) != (after_acl.st_dev, after_acl.st_ino):
+            return None
+        return after_acl
     except OSError:
-        return False
+        return None
+
+
+def private_file_is_trusted(path: Path, *, max_bytes: int = MAX_PRIVATE_STATE_BYTES) -> bool:
+    """Return whether an existing state file satisfies the local trust contract."""
+
+    return _trusted_file_stat(path, max_bytes=max_bytes) is not None
 
 
 def read_private_json(path: Path, *, max_bytes: int = MAX_PRIVATE_STATE_BYTES) -> dict[str, Any]:
     """Read a trusted, bounded JSON object or return an empty object."""
 
-    if not private_file_is_trusted(path, max_bytes=max_bytes):
+    expected = _trusted_file_stat(path, max_bytes=max_bytes)
+    if expected is None:
         return {}
     try:
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
@@ -316,19 +434,46 @@ def read_private_json(path: Path, *, max_bytes: int = MAX_PRIVATE_STATE_BYTES) -
             flags |= os.O_NOFOLLOW
         descriptor = os.open(path, flags)
         try:
-            before = os.fstat(descriptor)
-            raw = os.read(descriptor, max_bytes + 1)
-            after = os.fstat(descriptor)
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode):
+                return {}
+            if (expected.st_dev, expected.st_ino) != (opened.st_dev, opened.st_ino):
+                return {}
+            chunks: list[bytes] = []
+            remaining = max_bytes + 1
+            while remaining > 0:
+                chunk = os.read(descriptor, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
         finally:
             os.close(descriptor)
-        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
-            return {}
-        if len(raw) > max_bytes:
+        if len(raw) < 2 or len(raw) > max_bytes:
             return {}
         payload = json.loads(raw.decode("utf-8-sig"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _replace_with_retry(
+    source: Path,
+    destination: Path,
+    *,
+    attempts: int = _WINDOWS_REPLACE_ATTEMPTS,
+    base_delay: float = _WINDOWS_REPLACE_BASE_DELAY_SECONDS,
+) -> None:
+    total = max(1, int(attempts))
+    for attempt in range(total):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt + 1 >= total:
+                raise
+            time.sleep(base_delay * (attempt + 1))
 
 
 def write_private_json(path: Path, payload: dict[str, Any], *, temp_tag: str, max_bytes: int = MAX_PRIVATE_STATE_BYTES) -> None:
@@ -341,7 +486,8 @@ def write_private_json(path: Path, payload: dict[str, Any], *, temp_tag: str, ma
     safe_tag = "".join(ch for ch in str(temp_tag) if ch.isalnum())[:64]
     if not safe_tag:
         raise RuntimeError("窗口宿主临时状态标识无效")
-    temporary = path.with_name(f".{path.name}.{safe_tag}.tmp")
+    nonce = secrets.token_hex(6)
+    temporary = path.with_name(f".{path.name}.{safe_tag}.{nonce}.tmp")
     descriptor = -1
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
@@ -354,7 +500,7 @@ def write_private_json(path: Path, payload: dict[str, Any], *, temp_tag: str, ma
         _set_private_permissions(temporary, directory=False)
         if not _permissions_are_private(temporary, directory=False):
             raise RuntimeError("无法验证窗口宿主临时状态文件的私有权限")
-        os.replace(temporary, path)
+        _replace_with_retry(temporary, path)
         _set_private_permissions(path, directory=False)
         if not private_file_is_trusted(path, max_bytes=max_bytes):
             raise RuntimeError("无法验证窗口宿主状态文件的当前用户私有权限")

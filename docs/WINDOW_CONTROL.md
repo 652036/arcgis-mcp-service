@@ -66,7 +66,7 @@ arcgis_pro_window_status()
 
 协议 v4 的关键不变量：
 
-1. 只有精确 `CURRENT` 进入宿主，绝对路径始终留在文件模式。
+1. 客户端接受 `CURRENT` 和 `CURRENT:进程号`，在锁定窗口后将线路内参数规范为精确 `CURRENT`；绝对路径始终留在文件模式。
 2. 发现状态中的服务名、协议版本、包版本、端口、随机 session 和随机 bearer 必须一致。
 3. 宿主仅监听本机 loopback；发现状态原子写入 Windows 当前用户的 `%LOCALAPPDATA%\ArcGISProMcp\window-host`。目录和文件使用受保护的私有 ACL，读取时校验当前用户所有者、protected DACL、普通文件类型和大小，并拒绝 symlink/reparse point。状态中的 bearer 是本机能力凭据，不应复制、提交或共享。
 4. 每个请求携带预期 session/project。排队期间用户切换工程时，请求在执行前被拒绝。
@@ -74,7 +74,15 @@ arcgis_pro_window_status()
 6. 每个调用只构造并绑定一个 `ArcGISProject("CURRENT")` 引用，同时用于目标复核和工具执行。
 7. 队列有界；尚未开始的过期请求可以取消。调用已经开始后再超时，其结果是**未知**，不能自动重放写请求。
 8. 停止宿主会拒绝新请求并等待已开始调用结束，防止停止/接收竞态。
-9. 默认端口只允许一个可发现宿主；多 Pro 实例必须为每个实例配置不同 `ARCGIS_PRO_MCP_HOST_PORT`。
+9. 每个宿主发布按进程与会话区分的独立私有记录，并保留按实际端口的兼容记录。默认端口被占用时自动申请空闲回环端口；显式配置的端口则不自动更换。
+
+### 多窗口选择与并行调用
+
+每个Pro进程分别运行接入入口。`arcgis_pro_list_windows()`只返回已鉴权且存活的宿主，不扫描网络端口，也不返回bearer。用 `arcgis_pro_select_window(process_id=..., expected_project=...)` 确认默认 `CURRENT` 目标，或先 `arcgis_pro_window_status(process_id=...)`，再在原有工具中使用 `aprx_path="CURRENT:进程号"`。
+
+显式进程选择使用调用局部的ContextVar，不修改其他并行调用的默认目标。确认记录分别绑定端点、进程、宿主会话和工程；宿主重启或工程切换后必须重新确认。多个宿主未选择时拒绝含糊的 `CURRENT`，已选宿主断开后拒绝请求，不改连其余窗口。
+
+异步提交从 `arguments.aprx_path` 取得显式目标；状态、取消、事件等待、断开工具可传 `process_id`，因此一个MCP连接可以管理多个窗口各自的任务。每个Pro进程内部仍然串行运行ArcPy，各进程可以独立处理请求。一个Pro进程里的多个地图/布局仍通过原有的地图、布局标识区分。
 
 未保存的 Untitled 工程没有稳定身份，宿主会保持 not-ready。改变 stdio 环境变量后要重启 MCP 客户端并重新接入宿主，旧宿主不会动态取得更宽权限。
 

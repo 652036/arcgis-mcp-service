@@ -137,6 +137,69 @@ class LiveAnalysisSecurityTests(unittest.TestCase):
                     },
                 )
 
+    def test_allowlist_uses_verified_arcpy_module_names(self) -> None:
+        for valid_name in (
+            "management.Dissolve",
+            "cartography.AggregatePolygons",
+            "analysis.GenerateNearTable",
+            "analysis.Statistics",
+        ):
+            self.assertIn(valid_name, live_analysis.CURRENT_NAMED_GP_TOOLS)
+        for wrong_name in (
+            "analysis.Dissolve",
+            "management.AggregatePolygons",
+            "management.GenerateNearTable",
+            "management.Statistics",
+        ):
+            self.assertNotIn(wrong_name, live_analysis.CURRENT_NAMED_GP_TOOLS)
+
+    def test_query_current_layer_truncates_large_shape_and_cell_values(self) -> None:
+        huge_wkt = "POLYGON ((" + "0 0, " * 1000 + "0 0))"
+        huge_json = '{"rings":[' + "[0,0]," * 1000 + "]}"
+        huge_wkb = b"\x01\x02" * 2000
+        huge_text = "X" * 5000
+
+        class _Cursor:
+            def __enter__(self):
+                return iter(
+                    [(1, huge_wkt, huge_json, huge_wkb, (10.5, 20.5), huge_text)]
+                )
+
+            def __exit__(self, *_args: object) -> bool:
+                return False
+
+        layer = SimpleNamespace(
+            name="Parcels",
+            longName="Parcels",
+            URI="layer://parcels",
+            dataSource="C:/data/parcels.shp",
+            getSelectionSet=lambda: [1],
+        )
+        map_obj = SimpleNamespace(name="Current", listLayers=lambda: [layer])
+        arcpy = SimpleNamespace(
+            ListFields=lambda _layer: [
+                SimpleNamespace(name="OBJECTID"),
+                SimpleNamespace(name="NAME"),
+            ],
+            da=SimpleNamespace(SearchCursor=lambda *_args, **_kwargs: _Cursor()),
+        )
+
+        result = live_analysis.query_current_layer(
+            arcpy,
+            map_obj,
+            "Parcels",
+            ["OBJECTID", "SHAPE@WKT", "SHAPE@JSON", "SHAPE@WKB", "SHAPE@XY", "NAME"],
+            selected_only=True,
+        )
+        self.assertTrue(result["cell_truncated"])
+        row = result["rows"][0]
+        self.assertEqual(row["OBJECTID"], 1)
+        self.assertEqual(row["SHAPE@XY"], (10.5, 20.5))
+        for field in ("SHAPE@WKT", "SHAPE@JSON", "SHAPE@WKB", "NAME"):
+            self.assertIsInstance(row[field], str)
+            self.assertEqual(len(row[field]), live_analysis._MAX_CELL + 1)
+            self.assertTrue(row[field].endswith("…"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -107,19 +107,35 @@ class _CompatFastMCP:
 
 
 def _declared_tool_names(server_path: str) -> list[str]:
-    tree = ast.parse(Path(server_path).read_text(encoding="utf-8"))
+    server_file = Path(server_path)
+    source_files = [server_file]
+    tools_dir = server_file.parent / "tools"
+    if tools_dir.is_dir():
+        source_files.extend(
+            sorted(p for p in tools_dir.glob("*.py") if not p.name.startswith("_"))
+        )
     names: list[str] = []
-    for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        for decorator in node.decorator_list:
-            if not isinstance(decorator, ast.Call):
+    for path in source_files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            if not isinstance(decorator.func, ast.Attribute) or decorator.func.attr != "tool":
-                continue
-            for keyword in decorator.keywords:
-                if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
-                    names.append(str(keyword.value.value))
+            for decorator in node.decorator_list:
+                if not isinstance(decorator, ast.Call):
+                    continue
+                is_mcp_tool = (
+                    isinstance(decorator.func, ast.Attribute)
+                    and decorator.func.attr == "tool"
+                )
+                is_domain_tool = (
+                    isinstance(decorator.func, ast.Name)
+                    and decorator.func.id == "tool"
+                )
+                if not (is_mcp_tool or is_domain_tool):
+                    continue
+                for keyword in decorator.keywords:
+                    if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
+                        names.append(str(keyword.value.value))
     return names
 
 
@@ -311,6 +327,10 @@ class ToolProtocolTests(unittest.TestCase):
             by_name = {tool.name: tool for tool in tools}
             self.assertTrue(by_name["arcgis_pro_active_view_info"].meta["arcgisPro"]["requiresCurrent"])
             self.assertTrue(by_name["arcgis_pro_window_job_submit"].meta["arcgisPro"]["requiresCurrent"])
+            self.assertTrue(by_name["arcgis_pro_select_window"].meta["arcgisPro"]["requiresCurrent"])
+            self.assertTrue(by_name["arcgis_pro_detach_window"].meta["arcgisPro"]["requiresCurrent"])
+            self.assertFalse(by_name["arcgis_pro_window_status"].meta["arcgisPro"]["requiresCurrent"])
+            self.assertFalse(by_name["arcgis_pro_list_windows"].meta["arcgisPro"]["requiresCurrent"])
             self.assertFalse(by_name["arcgis_pro_list_maps"].meta["arcgisPro"]["requiresCurrent"])
             self.assertFalse(
                 by_name["arcgis_pro_sdk_bridge_status"].meta["arcgisPro"]["requiresSdkBridge"]

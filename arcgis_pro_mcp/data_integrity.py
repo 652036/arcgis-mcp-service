@@ -14,6 +14,18 @@ import os
 from collections import Counter
 from typing import Any
 
+from arcgis_pro_mcp._gp_common import (
+    gp_messages as _messages,
+)
+from arcgis_pro_mcp._gp_common import (
+    management_tool,
+    require_exists,
+    require_schema_lock,
+    required_text,
+)
+from arcgis_pro_mcp._gp_common import (
+    validated_enum as _enum,
+)
 from arcgis_pro_mcp.paths import (
     require_allow_destructive,
     validate_input_path_optional,
@@ -29,28 +41,6 @@ _CONTINGENT_IMPORT_TYPES = frozenset({"UNION", "REPLACE"})
 _MISSING = object()
 
 
-def _messages(result: Any) -> list[str]:
-    messages: list[str] = []
-    try:
-        for index in range(int(result.messageCount)):
-            messages.append(str(result.getMessage(index)))
-    except Exception:  # noqa: BLE001
-        try:
-            combined = str(result.getMessages())
-        except Exception:  # noqa: BLE001
-            combined = ""
-        if combined:
-            messages.append(combined)
-    return messages
-
-
-def _enum(value: str, allowed: frozenset[str], label: str) -> str:
-    normalized = (value or "").strip().upper()
-    if normalized not in allowed:
-        raise RuntimeError(f"{label} 须为 {sorted(allowed)}")
-    return normalized
-
-
 def _text(
     value: Any,
     label: str,
@@ -59,13 +49,14 @@ def _text(
     required: bool = True,
     forbid_delimiters: bool = False,
 ) -> str:
-    if not isinstance(value, str):
-        raise RuntimeError(f"{label} 必须为字符串")
-    cleaned = value.strip()
-    if required and not cleaned:
-        raise RuntimeError(f"{label} 不能为空")
-    if len(cleaned) > maximum or "\x00" in cleaned:
-        raise RuntimeError(f"{label} 无效")
+    if required:
+        cleaned = required_text(value, label, max_length=maximum, strict_str=True)
+    else:
+        if not isinstance(value, str):
+            raise RuntimeError(f"{label} 必须为字符串")
+        cleaned = value.strip()
+        if len(cleaned) > maximum or "\x00" in cleaned:
+            raise RuntimeError(f"{label} 无效")
     if forbid_delimiters and any(char in cleaned for char in (";", "\r", "\n")):
         raise RuntimeError(f"{label} 含非法分隔符")
     return cleaned
@@ -126,27 +117,16 @@ def _dataset(arcpy: Any, dataset_path: str, label: str = "dataset_path") -> str:
     path = validate_input_path_optional(dataset_path, label)
     if not isinstance(path, str):
         raise RuntimeError(f"{label} 必须为 input roots 内的绝对数据集路径")
-    exists = getattr(arcpy, "Exists", None)
-    if not callable(exists):
-        raise RuntimeError("当前 ArcPy 不支持 Exists，无法核验数据集")
-    if not bool(exists(path)):
-        raise RuntimeError(f"{label} 不存在：{path}")
+    require_exists(arcpy, path, label, require_api=True)
     return path
 
 
 def _management_tool(arcpy: Any, name: str) -> Any:
-    tool = getattr(getattr(arcpy, "management", None), name, None)
-    if not callable(tool):
-        raise RuntimeError(f"当前 ArcGIS Pro/ArcPy 不支持 arcpy.management.{name}")
-    return tool
+    return management_tool(arcpy, name, prefix="当前 ArcGIS Pro/ArcPy 不支持")
 
 
 def _require_schema_lock(arcpy: Any, dataset_path: str) -> None:
-    tester = getattr(arcpy, "TestSchemaLock", None)
-    if not callable(tester):
-        raise RuntimeError("当前 ArcPy 不支持 TestSchemaLock，拒绝方案变更")
-    if not bool(tester(dataset_path)):
-        raise RuntimeError(f"无法获取方案锁：{dataset_path}")
+    require_schema_lock(arcpy, dataset_path, require_api=True)
 
 
 def _mutation_target(

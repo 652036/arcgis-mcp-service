@@ -2,7 +2,8 @@
 
 ## Source Layout
 
-- `arcgis_pro_mcp/server.py`: FastMCP registration and thin JSON adapters.
+- `arcgis_pro_mcp/server.py`: facade, shared runtime/cache helpers, and single-pass FastMCP registration orchestrator.
+- `arcgis_pro_mcp/tools/`: domain-split MCP tool definitions (`core_window.py`, `project_map.py`, `data_access.py`, `gp_core.py`, `gp_analysis.py`, `gp_raster.py`, `gp_stats_network.py`, `editing_schema.py`, `cartography_publishing.py`, `enterprise_utility_sdk.py`), `_registry.py` (`ARCGIS_PRO_MCP_TOOL_PROFILE` resolution, `SERVER_PROXY`, and lazy `@tool` specs), and `__init__.py` (re-exporting all tool functions onto `server.py` and registering profile-selected tools).
 - `arcgis_pro_mcp/tool_protocol.py`: structured-result wrapping, generated descriptions, annotations, execution-mode flags, gates, and `arcgis_pro_tool_info` catalog.
 - `arcgis_pro_mcp/paths.py`: shared roots and write/destructive/CIM/publish/enterprise policy gates.
 - `arcgis_pro_mcp/private_state.py`, `redaction.py`: private bridge-state files and centralized secret/error redaction.
@@ -23,7 +24,7 @@ Capability helpers are split by domain:
 
 1. Put ArcPy logic in the relevant helper module and inject the `arcpy` dependency so policy behavior can be unit-tested without ArcGIS Pro.
 2. Validate typed enums/numbers, exact target identity, input roots, output roots, existence/nonexistence, extension/data preconditions, schema lock, and confirmation before invoking ArcPy.
-3. Register a thin explicit `arcgis_pro_*` wrapper in `server.py`. Keep the direct Python function's historical JSON-string behavior.
+3. Register a thin explicit `arcgis_pro_*` wrapper with `@tool` in the matching domain module under `arcgis_pro_mcp/tools/` (automatically re-exported onto `server.py` by `tools.register_tools`). Resolve patchable dependencies through `SERVER_PROXY` and keep the direct Python function's historical JSON-string behavior.
 4. Classify the tool conservatively in `tool_protocol.py`: read-only, destructive, idempotent, open-world, `CURRENT`/SDK requirement, base and conditional gates, export or GP output roots, and enterprise/SDK special gates.
 5. Update `arcgis_pro_server_capabilities` if the capability summary or reported deployment state changes. Do not rely on name heuristics when a tool is an exception.
 6. Add module tests for validation and exact ArcPy call shape, plus registry/protocol tests for structured output and gate metadata.

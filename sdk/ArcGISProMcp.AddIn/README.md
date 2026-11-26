@@ -305,7 +305,9 @@ normal success.
 Ordinary SDK reads and writes are enabled by default. Set
 `ARCGIS_PRO_MCP_ALLOW_WRITE=0` (or `false`, `no`, or `off`) to make the bridge
 read-only. The narrower edit-command, discard, feature-edit, destructive, and
-generic-GP gates remain disabled unless they are enabled explicitly.
+allowlisted typed SDK-GP gates remain disabled unless they are enabled
+explicitly (unlike the standalone Python generic GP runner, SDK GP is
+explicitly allowlisted and requires built-in typed contracts).
 
 Example explicitly scoped configuration:
 

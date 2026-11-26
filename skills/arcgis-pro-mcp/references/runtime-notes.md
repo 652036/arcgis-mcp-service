@@ -19,6 +19,15 @@ Use runtime discovery over this reference when they disagree. Real behavior also
 
 Do not change modes to work around a rejected gate or path. A deliberate mode change requires a new target check.
 
+## Tool Profiles
+
+`ARCGIS_PRO_MCP_TOOL_PROFILE` controls which MCP tools are registered at startup:
+
+- `full` (default when unset): registers all 460 tools (~492 KB `tools/list` payload).
+- `core`: registers 60 high-leverage tools (~52 KB `tools/list` payload, faster startup) covering discovery/capabilities, live window control, project/map/layer inspection and core manipulation, data/schema inspection, generic GP execution/discovery, checked raster QA, and basic symbology/export.
+- Domain combinations: comma-separated canonical domain names such as `core,editing,raster`. Canonical domains are `window`, `project`, `data`, `gp`, `analysis`, `raster`, `stats_network`, `editing`, `cartography`, and `enterprise`. Module names (`core_window`, `project_map`, `data_access`, `gp_core`, `gp_analysis`, `gp_raster`, `gp_stats_network`, `editing_schema`, `cartography_publishing`, `enterprise_utility_sdk`) and shorthand aliases (`stats`, `network`, `schema`, `publishing`, `utility`, `sdk`) are also accepted.
+- Invalid or empty tokens fail closed with `ValueError`. Inspect `tool_profile`, `available_tool_profiles`, and `registered_tool_count` via `arcgis_pro_environment_info()` or `arcgis_pro_server_capabilities()`.
+
 ## File Mode
 
 - Pass an absolute `.aprx`; `ARCGIS_PRO_MCP_PROJECT_ROOTS` constrains it when configured and otherwise falls back to input roots.
@@ -44,7 +53,7 @@ Use `arcgis_pro_window_job_submit` only for a tool that explicitly accepts `aprx
 
 Stop the old host before updating its code. Wait until Pro reports that the window host stopped, refresh/re-add the toolbox if necessary, restart the separate MCP client after tool/protocol changes, then reconfirm the target. The package-external bootstrap purges the complete cached `arcgis_pro_mcp.*` generation before importing the replacement. This prevents a stale `pro_attach` from causing errors such as a missing `FORWARDED_ENV_KEYS`; do not reload pieces of the package while a host is active.
 
-Multiple Pro instances require a distinct `ARCGIS_PRO_MCP_HOST_PORT` for each matching host/client pair.
+Multiple Pro instances can run the same launcher without manual port configuration: the first host uses 17865 and later hosts obtain free loopback ports. Each host has a private process/session discovery record. `arcgis_pro_list_windows` lists live hosts; `arcgis_pro_select_window(process_id=..., expected_project=...)` selects and confirms the default `CURRENT` target. For parallel calls, confirm each with `arcgis_pro_window_status(process_id=...)`, then use `aprx_path="CURRENT:<process_id>"`. Per-call selectors do not change the default selection. Missing selected hosts never fall back to another window. An explicitly configured `ARCGIS_PRO_MCP_HOST_PORT` remains an exact pin and fails if occupied. Async job status/cancel, event wait and detach also accept `process_id`.
 
 ## Native SDK Bridge
 

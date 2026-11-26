@@ -49,9 +49,17 @@ class _RejectFriendlyRuleManagement(_Management):
 
 
 class _Arcpy:
-    def __init__(self, *, exists: bool = True, lock: bool = True, count: int = 2) -> None:
+    def __init__(
+        self,
+        *,
+        exists: bool = True,
+        lock: bool = True,
+        count: int = 2,
+        data_type: str = "FeatureClass",
+    ) -> None:
         self._exists = exists
         self._lock = lock
+        self._data_type = data_type
         self.management = _Management(count)
         self.da = SimpleNamespace(
             ListSubtypes=lambda _path: {
@@ -96,7 +104,7 @@ class _Arcpy:
 
     def Describe(self, path: str) -> SimpleNamespace:
         return SimpleNamespace(
-            dataType="FeatureClass",
+            dataType=self._data_type,
             catalogPath=path,
             shapeType="Polygon",
             OIDFieldName="OBJECTID",
@@ -447,6 +455,32 @@ class DatasetManagementTests(unittest.TestCase):
         self.assertEqual(name, "RemoveFeatureClassFromTopology")
         self.assertEqual(args, (os.path.normpath(topology), "PointFeatures"))
         self.assertEqual(kwargs, {})
+
+    def test_delete_relationship_class_requires_relationship_class_data_type(self) -> None:
+        with tempfile.TemporaryDirectory() as output_root, patch.dict(
+            os.environ,
+            {
+                "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+                "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
+            },
+            clear=True,
+        ):
+            for bad_type in ("FeatureClass", "Workspace", ""):
+                arcpy = _Arcpy(data_type=bad_type)
+                target = str(Path(output_root) / "data.gdb" / "Parcels")
+                with self.subTest(data_type=bad_type):
+                    with self.assertRaisesRegex(RuntimeError, "RelationshipClass"):
+                        dataset_management.run_delete_relationship_class(arcpy, target)
+                    self.assertEqual(arcpy.management.calls, [])
+
+            rc_arcpy = _Arcpy(data_type="RelationshipClass")
+            rc_path = str(Path(output_root) / "data.gdb" / "OriginDestination")
+            messages = dataset_management.run_delete_relationship_class(rc_arcpy, rc_path)
+        self.assertEqual(messages, ["message-0"])
+        self.assertEqual(
+            rc_arcpy.management.calls,
+            [("Delete", (os.path.normpath(rc_path),), {})],
+        )
 
 
 if __name__ == "__main__":

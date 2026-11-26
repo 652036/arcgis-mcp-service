@@ -631,6 +631,12 @@ def run_delete_relationship_class(arcpy: Any, relationship_class_path: str) -> l
     require_gp_output_root_mandatory()
     path = validate_gp_output_path(relationship_class_path, "relationship_class_path")
     _require_exists(arcpy, path, "relationship_class_path")
+    desc = arcpy.Describe(path)
+    data_type = str(getattr(desc, "dataType", "") or "")
+    if data_type != "RelationshipClass":
+        raise RuntimeError(
+            f"目标不是 RelationshipClass（实际 dataType={data_type or 'UNKNOWN'}），拒绝删除：{path}"
+        )
     _require_schema_lock(arcpy, path)
     return _messages(arcpy.management.Delete(path))
 

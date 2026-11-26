@@ -11,6 +11,24 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from arcgis_pro_mcp._gp_common import (
+    gp_messages as _messages,
+)
+from arcgis_pro_mcp._gp_common import (
+    management_tool as _management_tool,
+)
+from arcgis_pro_mcp._gp_common import (
+    require_exists as _require_exists,
+)
+from arcgis_pro_mcp._gp_common import (
+    require_schema_lock as _require_schema_lock,
+)
+from arcgis_pro_mcp._gp_common import (
+    required_text,
+)
+from arcgis_pro_mcp._gp_common import (
+    validated_enum as _enum,
+)
 from arcgis_pro_mcp.paths import (
     require_allow_destructive,
     require_allow_enterprise_write,
@@ -23,28 +41,9 @@ _DELTA_ONLY = frozenset({"ALL", "ONLY_DELTAS"})
 _RECORD_DATES_IN = frozenset({"UTC", "DATABASE_TIME"})
 
 
-def _messages(result: Any) -> list[str]:
-    values: list[str] = []
-    try:
-        for index in range(int(result.messageCount)):
-            values.append(str(result.getMessage(index)))
-    except Exception:  # noqa: BLE001
-        pass
-    return values
-
-
-def _enum(value: str, allowed: frozenset[str], label: str) -> str:
-    normalized = str(value or "").strip().upper()
-    if normalized not in allowed:
-        raise RuntimeError(f"{label} 须为 {sorted(allowed)}")
-    return normalized
-
-
 def _name(value: str, label: str, *, max_length: int = 160) -> str:
     raw = str(value or "")
-    cleaned = raw.strip()
-    if not cleaned:
-        raise RuntimeError(f"{label} 不能为空")
+    cleaned = required_text(raw, label)
     if raw != cleaned:
         raise RuntimeError(f"{label} 首尾不能包含空白")
     if len(cleaned) > max_length or any(
@@ -68,25 +67,6 @@ def _enterprise_workspace(workspace_path: str) -> str:
     if not isinstance(path, str) or not path.casefold().endswith(".sde"):
         raise RuntimeError("workspace_path 必须是受控的 .sde 连接文件")
     return path
-
-
-def _require_exists(arcpy: Any, path: str, label: str) -> None:
-    exists = getattr(arcpy, "Exists", None)
-    if callable(exists) and not bool(exists(path)):
-        raise RuntimeError(f"{label} 不存在：{path}")
-
-
-def _require_schema_lock(arcpy: Any, path: str) -> None:
-    tester = getattr(arcpy, "TestSchemaLock", None)
-    if callable(tester) and not bool(tester(path)):
-        raise RuntimeError(f"无法获取方案锁：{path}")
-
-
-def _management_tool(arcpy: Any, name: str) -> Any:
-    tool = getattr(getattr(arcpy, "management", None), name, None)
-    if not callable(tool):
-        raise RuntimeError(f"当前 ArcPy 不支持 arcpy.management.{name}")
-    return tool
 
 
 def _field_map(arcpy: Any, dataset_path: str) -> dict[str, Any]:

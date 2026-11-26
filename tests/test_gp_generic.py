@@ -349,3 +349,86 @@ class GenericGPTests(unittest.TestCase):
                         {"in_features": output, "out_feature_class": output},
                     )
         self.assertEqual(arcpy.management.calls, [])
+
+    def test_generic_gp_rejects_expanded_inline_secret_parameters(self) -> None:
+        secret_keys = (
+            "passwd",
+            "db_pwd",
+            "portal_credential",
+            "service_api_key",
+            "signing_private_key",
+            "access_key",
+            "authorization",
+        )
+        arcpy = _FakeArcpy()
+        arcpy.GetParameterInfo = lambda _name: [
+            SimpleNamespace(name=key, parameterType="Optional", direction="Input")
+            for key in secret_keys
+        ] + [
+            SimpleNamespace(name="out_feature_class", parameterType="Required", direction="Output")
+        ]
+        with tempfile.TemporaryDirectory() as output_root, patch.dict(
+            os.environ,
+            {
+                "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+                "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "1",
+                "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
+            },
+            clear=True,
+        ):
+            output = str(Path(output_root) / "buffered.shp")
+            for key in secret_keys:
+                with self.subTest(key=key):
+                    with self.assertRaisesRegex(RuntimeError, "不允许内联敏感字符串参数"):
+                        gp_generic.run_tool(
+                            arcpy,
+                            "analysis.Buffer",
+                            {key: "top-secret-value", "out_feature_class": output},
+                        )
+        self.assertEqual(arcpy.management.calls, [])
+
+    def test_generic_gp_rejects_expanded_output_container_aliases(self) -> None:
+        container_keys = (
+            "output_workspace",
+            "output_folder",
+            "out_location",
+            "output_location",
+            "target_folder",
+            "destination_workspace",
+        )
+        arcpy = _FakeArcpy()
+        arcpy.GetParameterInfo = lambda _name: [
+            SimpleNamespace(name=key, parameterType="Optional", direction="Output")
+            for key in container_keys
+        ]
+        with tempfile.TemporaryDirectory() as output_root, patch.dict(
+            os.environ,
+            {
+                "ARCGIS_PRO_MCP_ALLOW_WRITE": "1",
+                "ARCGIS_PRO_MCP_ENABLE_GENERIC_GP": "1",
+                "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": output_root,
+            },
+            clear=True,
+        ):
+            for key in container_keys:
+                with self.subTest(key=key):
+                    with self.assertRaisesRegex(RuntimeError, "输出容器与名称分离"):
+                        gp_generic.run_tool(
+                            arcpy,
+                            "management.CopyFeatures",
+                            {key: output_root},
+                        )
+        self.assertEqual(arcpy.management.calls, [])
+
+    def test_list_toolboxes_and_tools_redact_error_secrets(self) -> None:
+        arcpy = _FakeArcpy()
+        arcpy.ListToolboxes = MagicMock(side_effect=RuntimeError("DB_PASSWORD=super_secret_1"))
+        arcpy.ListTools = MagicMock(side_effect=RuntimeError("PORTAL_TOKEN=super_secret_2"))
+        with self.assertRaises(RuntimeError) as ctx1:
+            gp_generic.list_toolboxes(arcpy)
+        self.assertNotIn("super_secret_1", str(ctx1.exception))
+        self.assertIn("[REDACTED]", str(ctx1.exception))
+        with self.assertRaises(RuntimeError) as ctx2:
+            gp_generic.list_tools_in_toolbox(arcpy, "management")
+        self.assertNotIn("super_secret_2", str(ctx2.exception))
+        self.assertIn("[REDACTED]", str(ctx2.exception))

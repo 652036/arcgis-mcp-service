@@ -24,13 +24,29 @@ class ProjectPathValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root, patch.dict(
             os.environ, {"ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root}, clear=True,
         ):
-            for suffix in (".geodatabase", ".sde", ".gpkg", ".sqlite", ".mdb"):
+            for suffix in (".geodatabase", ".gpkg", ".sqlite", ".mdb"):
                 with self.subTest(suffix=suffix):
                     database = Path(root) / ("data" + suffix)
                     database.touch()
                     output = database / "roads"
                     self.assertEqual(paths.validate_gp_output_path(str(output), "output"), str(output))
                     self.assertTrue(database.is_file())
+
+    def test_gp_output_blocks_external_connection_members_but_allows_sde_file_itself(self) -> None:
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ, {"ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root}, clear=True,
+        ):
+            sde_file = Path(root) / "prod.sde"
+            self.assertEqual(paths.validate_gp_output_path(str(sde_file), "output"), str(sde_file))
+            for blocked in (
+                sde_file / "dbo.HackTable",
+                sde_file / "FeatureDataset" / "dbo.HackFC",
+                Path(root) / "PUB.SDE" / "roads",
+                Path(root) / "server.ags" / "MapService",
+            ):
+                with self.subTest(blocked=str(blocked)):
+                    with self.assertRaisesRegex(RuntimeError, r"\.sde/\.ags"):
+                        paths.validate_gp_output_path(str(blocked), "output")
 
     def test_gp_output_still_creates_ordinary_parent_directories(self) -> None:
         with tempfile.TemporaryDirectory() as root, patch.dict(
@@ -135,3 +151,104 @@ class ProjectPathValidationTests(unittest.TestCase):
             output = Path(root, "result.pdf")
             with self.assertRaisesRegex(RuntimeError, "需要配置绝对路径"):
                 paths.validate_output_in_export_root(str(output), "output_path")
+
+    def test_semicolon_multivalue_and_control_chars_are_rejected_everywhere(self) -> None:
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ,
+            {
+                "ARCGIS_PRO_MCP_INPUT_ROOTS": root,
+                "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root,
+                "ARCGIS_PRO_MCP_EXPORT_ROOT": root,
+                "ARCGIS_PRO_MCP_PROJECT_ROOTS": root,
+            },
+            clear=True,
+        ):
+            good = Path(root) / "a.shp"
+            bad_inputs = [
+                rf"{good};C:\Windows\System32\secret.shp",
+                f"{good}\x00.shp",
+                f"{good}\r\nC:\\evil.shp",
+                f"{good}\t.shp",
+                f"{good}\x7f.shp",
+            ]
+            for payload in bad_inputs:
+                with self.subTest(payload=payload):
+                    self.assertFalse(paths.path_under_root(payload, root))
+                    with self.assertRaises(RuntimeError):
+                        paths.validate_input_path_optional(payload, "in_features")
+                    with self.assertRaises(RuntimeError):
+                        paths.validate_gp_output_path(payload, "out_features", create_parent=False)
+                    with self.assertRaises(RuntimeError):
+                        paths.validate_output_in_export_root(payload, "export_path")
+                    with self.assertRaises(RuntimeError):
+                        paths.validate_project_path(payload)
+
+            for bad_name in ("a.dbf;b.dbf", "a\x00.dbf", "a\n.dbf", "a\r.dbf", "a\x7f.dbf"):
+                with self.subTest(bad_name=bad_name):
+                    with self.assertRaises(RuntimeError):
+                        paths.validate_output_name(bad_name, "out_name")
+
+            self.assertEqual(paths.validate_project_path("CURRENT:1234"), "CURRENT")
+            for bad_current in (r"CURRENT;C:\evil.aprx", "CURRENT\n", "CURRENT:1234;evil", "CURRENT:1234\r"):
+                with self.subTest(bad_current=bad_current):
+                    with self.assertRaises(RuntimeError):
+                        paths.validate_project_path(bad_current)
+
+    def test_ntfs_ads_and_device_paths_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ,
+            {
+                "ARCGIS_PRO_MCP_INPUT_ROOTS": root,
+                "ARCGIS_PRO_MCP_GP_OUTPUT_ROOT": root,
+                "ARCGIS_PRO_MCP_EXPORT_ROOT": root,
+                "ARCGIS_PRO_MCP_PROJECT_ROOTS": root,
+            },
+            clear=True,
+        ):
+            ads_targets = [
+                f"{Path(root) / 'file.tif'}:hidden",
+                f"{Path(root) / 'file.tif'}::$DATA",
+                f"{Path(root) / 'dir:stream' / 'file.shp'}",
+                rf"\\?\{Path(root) / 'file.tif'}",
+                rf"\\.\{Path(root) / 'file.tif'}",
+            ]
+            for target in ads_targets:
+                with self.subTest(target=target):
+                    self.assertFalse(paths.path_under_root(target, root))
+                    with self.assertRaises(RuntimeError):
+                        paths.validate_input_path_optional(target, "in_path")
+                    with self.assertRaises(RuntimeError):
+                        paths.validate_gp_output_path(target, "out_path", create_parent=False)
+                    with self.assertRaises(RuntimeError):
+                        paths.validate_output_in_export_root(target, "export_path")
+                    with self.assertRaises(RuntimeError):
+                        paths.validate_project_path(target)
+
+    def test_unc_paths_rejected_without_explicit_roots_and_restricted_with_roots(self) -> None:
+        unc_targets = [
+            r"\\attacker\share\evil.shp",
+            "//attacker/share/evil.shp",
+        ]
+        with patch.dict(os.environ, {}, clear=True):
+            for unc in unc_targets:
+                with self.subTest(unc=unc):
+                    with self.assertRaisesRegex(RuntimeError, "UNC"):
+                        paths.validate_input_path_optional(unc, "in_path")
+                    with self.assertRaisesRegex(RuntimeError, "UNC"):
+                        paths.validate_gp_output_path(unc, "out_path", create_parent=False)
+                    with self.assertRaisesRegex(RuntimeError, "UNC"):
+                        paths.validate_project_path(unc)
+
+        with patch.dict(
+            os.environ,
+            {"ARCGIS_PRO_MCP_INPUT_ROOTS": r"\\fileserver\gis_share"},
+            clear=True,
+        ):
+            # Different UNC share must be rejected immediately without network resolution.
+            with self.assertRaisesRegex(RuntimeError, "ARCGIS_PRO_MCP_INPUT_ROOTS"):
+                paths.validate_input_path_optional(r"\\attacker\share\evil.shp", "in_path")
+            with patch("arcgis_pro_mcp.paths.os.path.realpath", side_effect=os.path.normpath):
+                allowed = paths.validate_input_path_optional(
+                    r"\\fileserver\gis_share\roads.shp", "in_path"
+                )
+            self.assertEqual(allowed, os.path.normpath(r"\\fileserver\gis_share\roads.shp"))

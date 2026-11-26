@@ -301,6 +301,33 @@ class EnterpriseGdbTests(unittest.TestCase):
         self.assertTrue(result["discarded_outstanding_edits"])
         self.assertFalse(arcpy.versioned)
 
+    def test_gp_messages_redact_embedded_credentials(self) -> None:
+        class _LeakyResult:
+            messageCount = 1
+
+            def getMessage(self, _index: int) -> str:
+                return "Connected https://sde:topsecret@db.internal/FeatureServer password=xyz"
+
+        arcpy = _Arcpy()
+        original_create = arcpy.management.CreateVersion
+
+        def _leaky_create(*args: object) -> _LeakyResult:
+            original_create(*args)
+            return _LeakyResult()
+
+        arcpy.management.CreateVersion = _leaky_create  # type: ignore[method-assign]
+        with patch.dict(os.environ, self.write_env, clear=True):
+            result = enterprise_gdb.create_version(
+                arcpy,
+                self.workspace,
+                "SDE.DEFAULT",
+                "RedactedCheck",
+            )
+        self.assertEqual(len(result["messages"]), 1)
+        self.assertNotIn("topsecret", result["messages"][0])
+        self.assertNotIn("xyz", result["messages"][0])
+        self.assertIn("[REDACTED]", result["messages"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

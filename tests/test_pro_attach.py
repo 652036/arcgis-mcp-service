@@ -141,7 +141,7 @@ class ProAttachTests(unittest.TestCase):
             def read(self) -> bytes:
                 return b'{"ok": true}'
 
-        with patch.object(pro_attach.urllib.request, "urlopen", return_value=Response()):
+        with patch.object(pro_attach, "_urlopen_loopback", return_value=Response()):
             self.assertIsNone(pro_attach.host_health())
 
     def test_host_health_uses_one_atomic_endpoint_snapshot(self) -> None:
@@ -183,8 +183,8 @@ class ProAttachTests(unittest.TestCase):
             patch.dict(os.environ, {pro_attach.ENV_PORT: "18001"}, clear=False),
             patch.object(pro_attach, "read_state", side_effect=states) as read,
             patch.object(
-                pro_attach.urllib.request,
-                "urlopen",
+                pro_attach,
+                "_urlopen_loopback",
                 return_value=Response(),
             ) as urlopen,
         ):
@@ -205,7 +205,7 @@ class ProAttachTests(unittest.TestCase):
             "project": r"C:\\current.aprx",
         }
         pro_attach.confirm_host_target(snapshot)
-        with patch.object(pro_attach.urllib.request, "urlopen", side_effect=error):
+        with patch.object(pro_attach, "_urlopen_loopback", side_effect=error):
             with self.assertRaisesRegex(RuntimeError, "denied by policy"):
                 pro_attach.host_call("arcgis_pro_list_maps", {"aprx_path": "CURRENT"}, snapshot)
 
@@ -265,3 +265,25 @@ class ProAttachTests(unittest.TestCase):
             payload = json.loads(server.arcgis_pro_environment_info())
         self.assertFalse(payload["window_attached"])
         self.assertIn("allow_write", payload)
+
+    def test_host_available_returns_false_on_resolution_error(self) -> None:
+        err = pro_attach._WindowResolutionError("disconnected", reason="disconnected", selected="101:abc")
+        with patch.dict(os.environ, {pro_attach.ENV_IN_HOST: ""}, clear=False), patch.object(
+            pro_attach,
+            "host_health",
+            side_effect=err,
+        ):
+            self.assertFalse(pro_attach.host_available())
+
+    def test_direct_http_opener_disables_proxies(self) -> None:
+        http_handlers = pro_attach._DIRECT_HTTP_OPENER.handle_open.get("http", [])
+        self.assertTrue(http_handlers)
+        self.assertFalse(
+            any(isinstance(handler, pro_attach.urllib.request.ProxyHandler) for handler in http_handlers)
+        )
+        self.assertFalse(
+            any(
+                isinstance(handler, pro_attach.urllib.request.ProxyHandler) and handler.proxies
+                for handler in pro_attach._DIRECT_HTTP_OPENER.handlers
+            )
+        )

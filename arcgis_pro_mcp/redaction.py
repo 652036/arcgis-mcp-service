@@ -25,23 +25,31 @@ _SENSITIVE_KEY_PARTS = (
     "apikey",
     "access_key",
     "accesskey",
+    "account_key",
     "accountkey",
+    "subscription_key",
+    "subscriptionkey",
     "signature",
 )
 
-_KEY_TOKEN = (
-    r"password|passwd|pwd|secret|token|access[_-]?token|refresh[_-]?token|id[_-]?token|"
-    r"api[_-]?key|access[_-]?key|account[_-]?key|client[_-]?secret|credential|"
-    r"authorization|private[_-]?key|subscription[_-]?key|signature|sig"
+_LONG_KEY_TOKEN = (
+    r"password(?:[_-]?utf8)?|passwd|secret|token|"
+    r"api[_-]?key|access[_-]?key|account[_-]?key|"
+    r"credential|authorization|private[_-]?key|subscription[_-]?key|signature"
+)
+_SHORT_KEY_TOKEN = r"pwd|sig"
+_KEY_NAME = (
+    rf"(?:[A-Za-z0-9_-]*?(?:{_LONG_KEY_TOKEN})"
+    rf"|(?:[A-Za-z0-9_-]+[_-])?(?:{_SHORT_KEY_TOKEN}))"
 )
 _URL_USERINFO_RE = re.compile(
     r"(?i)(?P<scheme>\b[a-z][a-z0-9+.-]*://)(?:[^/@\s]+@)"
 )
 _BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+")
-_QUERY_SECRET_RE = re.compile(rf"(?i)([?&](?:{_KEY_TOKEN})=)[^&#\s]*")
+_QUERY_SECRET_RE = re.compile(rf"(?i)([?&]{_KEY_NAME}=)[^&#\s]*")
 _ASSIGNMENT_SECRET_RE = re.compile(
-    rf"(?i)(\b(?:{_KEY_TOKEN})\b\s*[:=]\s*)"
-    r"(?:\"[^\"]*\"|'[^']*'|[^;,\s&}}\]]+)"
+    rf"(?i)((?:\"{_KEY_NAME}\"|'{_KEY_NAME}'|(?<![A-Za-z0-9_-]){_KEY_NAME}\b)\s*[:=]\s*)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^;,\s&}\]]+)"
 )
 
 

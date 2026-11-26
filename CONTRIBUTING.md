@@ -66,7 +66,7 @@ Avoid hard-coded tool totals in documentation. The authoritative inventory is pr
   `no`, or `off` for a read-only deployment.
 - Destructive, raw CIM, publishing, public-sharing, overwrite-publish, enterprise, and SDK-native operations must enforce their narrower gates as well.
 - Output-producing GP must require and remain below `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT`.
-- Prefer named wrappers. Generic Python GP and SDK GP require exact allowlists; SDK GP also requires a reviewed typed contract.
+- Native generic Python GP (`arcgis_pro_gp_run_tool`) is enabled by default without a deployment tool allowlist (set `ARCGIS_PRO_MCP_ENABLE_GENERIC_GP=0` to disable), while enforcing base write permission, `ARCGIS_PRO_MCP_GP_OUTPUT_ROOT`, complete new output paths, and prohibited-operation checks. Use named wrappers for `CURRENT` context, checked quality workflows, or operations outside that contract. SDK GP still requires an explicit allowlist (`ARCGIS_PRO_MCP_SDK_GP_ALLOWLIST`) and a code-reviewed typed contract.
 - Existing output must not be overwritten implicitly. Destructive operations need an exact target and the tool-specific confirmation/count contract.
 - Use environment-variable names or ArcGIS-managed connection files for credentials. Do not accept or log secrets unless an existing, documented security gate explicitly permits that channel.
 - Treat a timeout after execution began as an unknown outcome. Read state before any retry of a non-idempotent operation.

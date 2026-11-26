@@ -19,7 +19,7 @@
 | 模式 | 调用标识 | 执行位置 | 适用场景 | 影响已打开窗口 |
 | --- | --- | --- | --- | --- |
 | 文件模式 | 允许范围内的绝对 `.aprx` 路径 | 独立 ArcGIS Pro Python 进程 | 批处理、工程检查、数据生产、导出 | 否 |
-| Python `CURRENT` 宿主 | 精确值 `aprx_path="CURRENT"` | ArcGIS Pro 内运行的 Python 宿主 | 当前工程、活动视图、选择、布局、刷新和大部分既有工具 | 是 |
+| Python `CURRENT` 宿主 | `aprx_path="CURRENT"` 或 `"CURRENT:进程号"` | 每个 ArcGIS Pro 进程各自运行的 Python 宿主 | 指定窗口的工程、活动视图、选择、布局、刷新和大部分既有工具 | 是 |
 | SDK Add-In | 不透明 `sdk_session_ref` | ArcGIS Pro SDK Add-In | 原生事件、DrawComplete、相机/时间、可取消 GP、Undo/Redo、`EditOperation` | 是 |
 
 ```text
@@ -32,7 +32,7 @@ ArcGIS Pro MCP 服务
     └─ arcgis_pro_sdk_* ─────────► SDK Add-In：租约 / 事件 / 原生编辑
 ```
 
-绝对 `.aprx` 永远按文件模式处理。只有显式传入 `CURRENT` 才路由到 Python 宿主；宿主失联、重启或工程切换时会失败关闭，不会转而修改磁盘工程。实时接入有两条明确路径：Python 工具箱/脚本适合复用现有 `arcpy.mp` 工具，SDK Add-In 适合原生事件、响应式界面和 `EditOperation`。两者使用独立的发现、鉴权与控制协议，也不会自动取得当前工程的控制权。
+绝对 `.aprx` 永远按文件模式处理。显式传入 `CURRENT` 或 `CURRENT:进程号` 才路由到 Python 宿主；宿主失联、重启或工程切换时会失败关闭，不会改连其他窗口或转而修改磁盘工程。实时接入有两条明确路径：Python 工具箱/脚本适合复用现有 `arcpy.mp` 工具，SDK Add-In 适合原生事件、响应式界面和 `EditOperation`。两者使用独立的发现、鉴权与控制协议，也不会自动取得当前工程的控制权。
 
 更完整的协议说明见 [实时窗口控制架构](docs/WINDOW_CONTROL.md)。
 
@@ -124,7 +124,7 @@ arcgis_pro_server_capabilities()
 arcgis_pro_tool_info(name="arcgis_pro_network_solve_route")
 ```
 
-不要依赖 README 中的静态工具清单。`arcgis_pro_server_capabilities()` 会返回当前注册工具、只读/写入分类、路径要求、附加门禁和窗口状态。
+不要依赖 README 中的静态工具清单。`arcgis_pro_server_capabilities()` 和 `arcgis_pro_environment_info()` 会返回当前激活的 `tool_profile`、`available_tool_profiles`、`registered_tool_count`，以及只读/写入分类、路径要求、附加门禁和窗口状态。
 
 ### 4. 文件模式示例
 
@@ -146,6 +146,20 @@ Python 宿主能复用大量现有 `aprx_path` 工具，是接入当前工程最
 4. 要求 `window_attached=true`、`host_ready=true`、`target_confirmed=true`，并人工核对 `current_project`。
 5. 用 `arcgis_pro_active_view_info(aprx_path="CURRENT")` 做只读 smoke test。
 6. 只有操作眼前窗口时，后续工具才传 `aprx_path="CURRENT"`。
+
+### 多个 ArcGIS Pro 窗口
+
+在每个 Pro 进程中各运行一次接入工具即可。未设置固定端口时，第一个宿主使用17865，其他宿主自动取得空闲的本机回环端口，分别写入私有发现记录；无需为每个窗口增加一份MCP配置。
+
+```text
+arcgis_pro_list_windows()
+arcgis_pro_select_window(process_id=1234, expected_project="C:\\GIS_Projects\\a.aprx")
+arcgis_pro_list_maps(aprx_path="CURRENT")
+```
+
+并行操作时，先分别调用 `arcgis_pro_window_status(process_id=1234)` 确认目标，再把现有工程工具的路径写成 `aprx_path="CURRENT:1234"`。这种逐次调用指定的窗口不改变默认选择。默认窗口仅属于当前MCP服务会话；同时发现多个宿主而尚未选择时会要求明确选择，不能自动使用第一个或最后一个窗口。已选窗口绑定具体宿主会话，关闭它不会把后续调用转到别的窗口。
+
+异步提交支持 `arguments.aprx_path="CURRENT:1234"`；任务状态、取消、事件等待和断开工具支持 `process_id=1234`。`ARCGIS_PRO_MCP_HOST_PORT`仍可用于显式固定端口，显式指定的端口被占用时不会自动换端口。升级代码后，已接入的旧宿主需要停止并重新运行入口。
 
 窗口启动器会优先使用仓库根目录 `.arcgis-pro-mcp-deps` 中的兼容 FastMCP，避免修改 ArcGIS Pro 的系统环境。若启动时报 `No module named 'mcp'`，在 PowerShell 中运行（按实际路径替换）：
 
@@ -227,7 +241,8 @@ SDK 写请求使用 `expectedMapUri`、context/selection/edit generation、选�
 | `ARCGIS_PRO_MCP_SDK_ALLOW_EDIT_COMMANDS=1` | SDK Undo/Redo/保存类编辑命令 |
 | `ARCGIS_PRO_MCP_SDK_ALLOW_FEATURE_EDITS=1` | SDK 原生要素创建/修改/删除 |
 | `ARCGIS_PRO_MCP_SDK_ALLOW_DISCARD_EDITS=1` | SDK 丢弃全部待保存编辑 |
-| `ARCGIS_PRO_MCP_HOST_PORT` | 将一个 Python `CURRENT` 宿主绑定到一个显式 loopback 端口 |
+| `ARCGIS_PRO_MCP_HOST_PORT` | 可选的精确端口固定配置；省略即可自动分配和发现多个窗口 |
+| `ARCGIS_PRO_MCP_TOOL_PROFILE` | 控制 MCP 注册的工具子集。默认 `full`（全部 460 个工具，`tools/list` 约 492 KB）；可设为 `core`（60 个高频核心工具，约 52 KB）或按域逗号组合如 `core,editing,raster`。标准域：`window`、`project`、`data`、`gp`、`analysis`、`raster`、`stats_network`、`editing`、`cartography`、`enterprise`（同时支持模块名及简写别名 `stats`、`network`、`schema`、`publishing`、`utility`、`sdk`；非法值将失败关闭） |
 
 此外：
 
@@ -266,7 +281,7 @@ SDK 写请求使用 `expectedMapUri`、context/selection/edit generation、选�
 
 - 确认工程已保存、宿主仍在运行，且 stdio 与 Pro 使用匹配的宿主端口。
 - 每次宿主重启或切换工程后重新调用 `arcgis_pro_window_status()`。
-- 多个 Pro 实例应配置不同 `ARCGIS_PRO_MCP_HOST_PORT`；不要依赖“第一个窗口”。
+- 每个Pro实例分别运行接入工具，再通过 `arcgis_pro_list_windows` 和进程号选择目标；不必手动分配端口，也不要依赖“第一个窗口”。
 
 ### SDK bridge 未发现或发现多个
 

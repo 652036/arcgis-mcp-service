@@ -13,6 +13,17 @@ import os
 import re
 from typing import Any
 
+from arcgis_pro_mcp._gp_common import (
+    arcpy_exists,
+    require_exists,
+    required_text,
+)
+from arcgis_pro_mcp._gp_common import (
+    gp_messages as _messages,
+)
+from arcgis_pro_mcp._gp_common import (
+    validated_enum as _enum,
+)
 from arcgis_pro_mcp.analysis_quality import existence_evidence
 from arcgis_pro_mcp.paths import (
     is_probably_path,
@@ -92,24 +103,14 @@ _DATA_TYPES = frozenset(
 _SAFE_DATASET_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 
 
-def _enum(value: str, allowed: frozenset[str], label: str) -> str:
-    normalized = (value or "").strip().upper()
-    if normalized not in allowed:
-        raise RuntimeError(f"{label} 须为 {sorted(allowed)}")
-    return normalized
-
-
 def _canonical_enum(value: str, allowed: dict[str, str], label: str) -> str:
-    normalized = (value or "").strip().upper()
-    if normalized not in allowed:
-        raise RuntimeError(f"{label} 须为 {sorted(allowed)}")
-    return allowed[normalized]
+    return _enum(value, allowed, label)
 
 
 def _clean_text(value: str, label: str, *, maximum: int = 4096, required: bool = False) -> str:
+    if required:
+        return required_text(value, label, max_length=maximum)
     cleaned = (value or "").strip()
-    if required and not cleaned:
-        raise RuntimeError(f"{label} 不能为空")
     if len(cleaned) > maximum or "\x00" in cleaned:
         raise RuntimeError(f"{label} 无效")
     return cleaned
@@ -127,31 +128,23 @@ def _finite(value: Any, label: str) -> float:
     return number
 
 
-def _messages(result: Any) -> list[str]:
-    messages: list[str] = []
-    try:
-        for index in range(int(result.messageCount)):
-            messages.append(str(result.getMessage(index)))
-    except Exception:  # noqa: BLE001
-        try:
-            combined = str(result.getMessages())
-        except Exception:  # noqa: BLE001
-            combined = ""
-        if combined:
-            messages.append(combined)
-    return messages
-
-
 def _exists(arcpy: Any, path: Any) -> bool:
-    checker = getattr(arcpy, "Exists", None)
-    if not callable(checker):
-        raise RuntimeError("当前 arcpy 不支持 Exists，无法核验栅格输出")
-    return bool(checker(path))
+    return arcpy_exists(
+        arcpy,
+        path,
+        require_api=True,
+        missing_api_message="当前 arcpy 不支持 Exists，无法核验栅格输出",
+    )
 
 
 def _require_existing(arcpy: Any, path: Any, label: str) -> None:
-    if not _exists(arcpy, path):
-        raise RuntimeError(f"{label} 不存在：{path}")
+    require_exists(
+        arcpy,
+        path,
+        label,
+        require_api=True,
+        missing_api_message="当前 arcpy 不支持 Exists，无法核验栅格输出",
+    )
 
 
 def _input(arcpy: Any, value: Any, label: str) -> Any:
